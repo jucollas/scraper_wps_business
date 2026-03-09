@@ -1,9 +1,9 @@
 1. lograr que el scraper lea el id order de wps
-2. implementar un base de datos sql para cuardar las ordenes de manera local
+2. implementar un base de datos sql para guardar las ordenes de manera local
 3. lograr que el scraper pueda leer correctamente las fechas de las ordenes
-4. implementar un sistema de sicronoizacion para que se sicronice las informcaion de las ordenes de la base de datos local y las que se encuentarn en wps web (la sicronozacion debe ser eficiente) 
+4. implementar un sistema de sincronizacion para la informacion de las ordenes de la base de datos local y las que se encuentarn en wps web (la sincronizacion debe ser eficiente) 
 5. mejorar la generacion de reportes pdf y xlx
-6. mejorar la interfaz paar poder seleccionar un reporte por mes
+6. mejorar la interfaz para poder seleccionar un reporte por mes
 7. mejorar los tiempos de scrapeo
-8. verificar compatibiulidad con windows
-9. hacer un archivo de installacion para windows
+8. verificar compatibilidad con windows
+9. hacer un archivo de instalacion para windows
