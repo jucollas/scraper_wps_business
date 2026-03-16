@@ -1,3 +1,17 @@
 .venv/
-wsp_session_firefox/
 old/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Local tool/editor metadata
+.claude/
+
+# Local runtime data
+app/orders.db
+run.bat
+wsp_session_*/
+app/wsp_session_*/

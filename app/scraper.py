@@ -5,15 +5,18 @@
 
 import re
 import time
+import logging
 from datetime import date, datetime, timedelta
 from typing import Callable
 
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException, NoSuchElementException
+from selenium.common.exceptions import TimeoutException, NoSuchElementException, StaleElementReferenceException
 
 from config import SAMPLE_ORDERS
+
+logger = logging.getLogger(__name__)
 
 ESTADO_MAP = {
     'payment requested': 'Pendiente',
@@ -26,6 +29,16 @@ ESTADO_MAP = {
     'entregado':         'Completado',
     'cancelled':         'Cancelado',
     'cancelado':         'Cancelado',
+}
+
+# Nombres de meses en español e inglés para parseo de fechas
+MESES_ES = {
+    'enero': 1, 'febrero': 2, 'marzo': 3, 'abril': 4,
+    'mayo': 5, 'junio': 6, 'julio': 7, 'agosto': 8,
+    'septiembre': 9, 'octubre': 10, 'noviembre': 11, 'diciembre': 12,
+    'ene': 1, 'feb': 2, 'mar': 3, 'abr': 4,
+    'may': 5, 'jun': 6, 'jul': 7, 'ago': 8,
+    'sep': 9, 'oct': 10, 'nov': 11, 'dic': 12,
 }
 
 
@@ -50,7 +63,7 @@ class OrderScraper:
 
     # ── Paso 1: abrir Business Tools ─────────────────────────────────────────
     def _open_business_tools(self) -> bool:
-        self._status("🔍 Buscando Herramientas de empresa…")
+        self._status("Buscando Herramientas de empresa…")
 
         selectors = [
             '[data-testid="menu-bar-item-business-tools"]',
@@ -60,7 +73,7 @@ class OrderScraper:
             '[aria-label="Herramientas de empresa"]',
         ]
         if self._try_click(selectors):
-            time.sleep(1.2)
+            time.sleep(1)
             return True
 
         # Último recurso: último botón del nav lateral
@@ -70,24 +83,24 @@ class OrderScraper:
                 'nav [role="button"], div[role="navigation"] [role="button"]')
             if btns:
                 btns[-1].click()
-                time.sleep(1.2)
+                time.sleep(1)
                 return True
         except Exception:
             pass
 
-        self._status("⚠️  No se encontró el botón de Herramientas.")
+        self._status("⚠️  No se encontró el menú de Herramientas. Recuerda que necesitas tener WhatsApp Business para tener activados los pedidos.")
         return False
 
     # ── Paso 2: abrir Orders ──────────────────────────────────────────────────
     def _open_orders(self) -> bool:
-        self._status("📋 Abriendo sección de Pedidos…")
+        self._status("Abriendo sección de Pedidos…")
 
         if self._try_click([
             '[data-testid="menu-item-orders"]',
             '[aria-label="Orders"]',
             '[aria-label="Pedidos"]',
         ]):
-            time.sleep(2)
+            time.sleep(1.5)
             return True
 
         try:
@@ -95,12 +108,12 @@ class OrderScraper:
                 By.XPATH,
                 '//*[normalize-space(text())="Orders" or normalize-space(text())="Pedidos"]')
             el.click()
-            time.sleep(2)
+            time.sleep(1.5)
             return True
         except NoSuchElementException:
             pass
 
-        self._status("⚠️  No se encontró la opción Pedidos.")
+        self._status("⚠️  No se encontró la sección de Pedidos. Recuerda que necesitas tener WhatsApp Business para tener activados los pedidos.")
         return False
 
     # ── Paso 3: leer la lista de órdenes ─────────────────────────────────────
@@ -113,7 +126,7 @@ class OrderScraper:
             self._status("⚠️  Panel de pedidos no cargó.")
             return SAMPLE_ORDERS
 
-        time.sleep(1)
+        time.sleep(0.8)
         self._status("📦 Leyendo lista de pedidos…")
 
         orders   = []
@@ -128,70 +141,99 @@ class OrderScraper:
             self._status("⚠️  Contenedor de órdenes no encontrado.")
             return SAMPLE_ORDERS
 
-        # Pre-leer todos los hijos para no perder referencias tras navegar
+        # Pre-leer los hijos para construir lista de trabajo
         children = container.find_elements(By.XPATH, './*')
-
-        for child in children:
+        # Guardamos XPATH de cada hijo para re-localizarlos tras navegar
+        child_xpaths = []
+        for i, child in enumerate(children):
             tag = child.tag_name.lower()
+            child_xpaths.append((tag, i + 1))  # (tag, posición 1-based)
 
-            # ── Encabezado de fecha ───────────────────────────────────────────────
+        # Primera pasada: extraer datos básicos sin navegar
+        rows_data = []
+        for child, (tag, pos) in zip(children, child_xpaths):
             if tag == 'div':
                 cur_date = self._parse_date_header(child.text.strip(), today)
+                rows_data.append(('date', cur_date))
+            elif tag == 'button':
+                order = self._parse_order_row(child, cur_date, len([r for r in rows_data if r[0] == 'order']))
+                if order:
+                    rows_data.append(('order', order))
+
+        # Segunda pasada: navegar a cada orden para obtener el ID real
+        order_count = 0
+        for i, (rtype, data) in enumerate(rows_data):
+            if rtype != 'order':
                 continue
 
-            if tag != 'button':
-                continue
-
-            # ── Datos básicos desde la fila (sin navegar) ─────────────────────────
-            order = self._parse_order_row(child, cur_date, len(orders))
-            if not order:
-                continue
-
-            # ── Abrir detalle para obtener el ID real de WhatsApp ─────────────────
-            order['id'] = self._fetch_order_id(child, len(orders))
-            print(order)
+            order = data
+            # Re-localizar el botón en el DOM actual
+            btn = self._find_order_button(order_count, container)
+            if btn is not None:
+                order['id'] = self._fetch_order_id(btn, order_count)
+                # Después de volver, re-localizar el container
+                try:
+                    container = self.driver.find_element(
+                        By.CSS_SELECTOR,
+                        'div.x1280gxy.x94v8gs.xw2csxc.x1odjw0f.x1n2onr6')
+                except NoSuchElementException:
+                    pass
 
             orders.append(order)
+            order_count += 1
             self._status(f"📦 {len(orders)} orden(es) leída(s)…")
 
         self._status(f"✅ {len(orders)} pedido(s) importados · {datetime.now().strftime('%H:%M')}")
         return orders or SAMPLE_ORDERS
 
+    def _find_order_button(self, idx: int, container):
+        """Re-localiza el idx-ésimo botón dentro del container."""
+        try:
+            btns = container.find_elements(By.XPATH, './/button')
+            if idx < len(btns):
+                return btns[idx]
+        except StaleElementReferenceException:
+            pass
+        return None
 
     def _fetch_order_id(self, btn, idx: int) -> str:
         """
         Hace clic en el botón de la orden, lee el ID del panel de detalle
-        (ej: 'order #4UKRYVC6TNC') y vuelve a la lista.
-        Devuelve el ID formateado o un fallback si algo falla.
+        y vuelve a la lista. Devuelve el ID formateado o un fallback.
         """
         fallback = f"ORD-{idx+1:03d}"
 
         try:
             btn.click()
+            time.sleep(0.5)
 
-            # Esperar a que cargue el panel de detalle:
-            # busca el div que contiene el texto "order #XXXXX"
-            detail_wait = WebDriverWait(self.driver, 10)
-            id_el = detail_wait.until(
-                EC.presence_of_element_located(
-                    (By.CSS_SELECTOR, 'div.xhslqc4'))
-            )
-            raw = id_el.text.strip()          # "order #4UKRYVC6TNC"
-            print(raw)
+            # Esperar panel de detalle con múltiples selectores posibles
+            detail_wait = WebDriverWait(self.driver, 8)
+            id_el = None
+            for sel in ['div.xhslqc4', '[data-testid="order-id"]', 'div[class*="order"] span']:
+                try:
+                    id_el = detail_wait.until(
+                        EC.presence_of_element_located((By.CSS_SELECTOR, sel)))
+                    break
+                except TimeoutException:
+                    continue
 
-            # Extraer solo el código alfanumérico tras el "#"
-            match = re.search(r'#([A-Z0-9]+)', raw, re.I)
-            order_id = match.group(1).upper() if match else raw
+            order_id = fallback
+            if id_el:
+                raw = id_el.text.strip()
+                match = re.search(r'#([A-Z0-9]+)', raw, re.I)
+                order_id = match.group(1).upper() if match else (raw or fallback)
 
-            # ── Volver a la lista ─────────────────────────────────────────────────
-            #self._go_back()
-
+            self._go_back()
             return order_id
 
-        except Exception:
-            print("la cague")
+        except Exception as e:
+            logger.warning(f"No se pudo obtener ID de orden {idx}: {e}")
+            try:
+                self._go_back()
+            except Exception:
+                pass
             return fallback
-
 
     def _go_back(self):
         """
@@ -200,27 +242,33 @@ class OrderScraper:
         """
         back_selectors = [
             'button[aria-label="Back"]',
-            'button[data-tab="2"]',             # data-tab que vimos en el HTML
             'button[aria-label="Volver"]',
+            'button[aria-label="Atrás"]',
+            'button[data-tab="2"]',
         ]
         for sel in back_selectors:
             try:
-                btn = WebDriverWait(self.driver, 5).until(
+                btn = WebDriverWait(self.driver, 4).until(
                     EC.element_to_be_clickable((By.CSS_SELECTOR, sel)))
                 btn.click()
                 break
             except TimeoutException:
                 continue
 
-        # Esperar a que la lista vuelva a estar visible
+        # Intentar también con JS si los selectores fallan (botón de navegador)
         try:
-            WebDriverWait(self.driver, 8).until(
+            WebDriverWait(self.driver, 6).until(
                 EC.presence_of_element_located(
                     (By.CSS_SELECTOR, 'button.x6s0dn4.x78zum5.xvt47uu')))
         except TimeoutException:
-            pass
+            # Si no aparece la lista, intentar con el botón atrás del navegador
+            try:
+                self.driver.execute_script("window.history.back()")
+                time.sleep(1)
+            except Exception:
+                pass
 
-        time.sleep(0.8)   # pequeño margen para que el DOM se estabilice
+        time.sleep(0.6)
 
     # ── Parseo de una fila de orden ───────────────────────────────────────────
     def _parse_order_row(self, btn, cur_date: date, idx: int) -> dict | None:
@@ -232,8 +280,11 @@ class OrderScraper:
                 sp = btn.find_element(By.CSS_SELECTOR, 'span[dir="auto"][title]')
                 order['cliente'] = sp.get_attribute('title') or sp.text.strip()
             except NoSuchElementException:
-                order['cliente'] = btn.find_element(
-                    By.CSS_SELECTOR, 'span[dir="auto"]').text.strip()
+                try:
+                    order['cliente'] = btn.find_element(
+                        By.CSS_SELECTOR, 'span[dir="auto"]').text.strip()
+                except NoSuchElementException:
+                    order['cliente'] = 'Desconocido'
 
             # Monto
             monto_raw = next(
@@ -265,7 +316,8 @@ class OrderScraper:
 
             return order
 
-        except Exception:
+        except Exception as e:
+            logger.warning(f"Error parseando fila de orden {idx}: {e}")
             return {
                 'id': f"ORD-ERR-{idx+1:03d}", 'cliente': 'Error al leer',
                 'producto': '—', 'monto': 0.0,
@@ -273,7 +325,7 @@ class OrderScraper:
             }
 
     # ── Helpers ───────────────────────────────────────────────────────────────
-    def _try_click(self, selectors: list[str], timeout: int = 10) -> bool:
+    def _try_click(self, selectors: list[str], timeout: int = 8) -> bool:
         w = WebDriverWait(self.driver, timeout)
         for sel in selectors:
             try:
@@ -285,15 +337,49 @@ class OrderScraper:
 
     @staticmethod
     def _parse_date_header(raw: str, today: date) -> date:
-        up = raw.upper()
+        if not raw:
+            return today
+
+        up = raw.strip().upper()
+
+        # Palabras clave
         if up in ('TODAY', 'HOY'):
             return today
         if up in ('YESTERDAY', 'AYER'):
             return today - timedelta(days=1)
-        for fmt in ('%d/%m/%Y', '%m/%d/%Y', '%d %b %Y', '%B %d, %Y'):
+
+        # Formatos numéricos estándar
+        for fmt in ('%d/%m/%Y', '%m/%d/%Y', '%d-%m-%Y', '%Y-%m-%d',
+                    '%d/%m/%y', '%d %b %Y', '%B %d, %Y',
+                    '%d de %B de %Y', '%d %B %Y'):
             try:
-                return datetime.strptime(up, fmt).date()
+                return datetime.strptime(raw.strip(), fmt).date()
             except ValueError:
                 continue
-        return today
 
+        # Parseo manual con meses en español: "15 de marzo de 2025" o "15 marzo 2025"
+        match = re.search(
+            r'(\d{1,2})\s+(?:de\s+)?([a-záéíóúüñ]+)(?:\s+(?:de\s+)?(\d{4}))?',
+            raw.strip(), re.I)
+        if match:
+            day  = int(match.group(1))
+            mes  = match.group(2).lower()
+            year = int(match.group(3)) if match.group(3) else today.year
+            if mes in MESES_ES:
+                try:
+                    return date(year, MESES_ES[mes], day)
+                except ValueError:
+                    pass
+
+        # "Mar 15" o "March 15" sin año → año actual
+        match2 = re.search(r'([a-záéíóúüñ]+)\s+(\d{1,2})', raw.strip(), re.I)
+        if match2:
+            mes = match2.group(1).lower()
+            day = int(match2.group(2))
+            if mes in MESES_ES:
+                try:
+                    return date(today.year, MESES_ES[mes], day)
+                except ValueError:
+                    pass
+
+        return today

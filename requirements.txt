@@ -1,4 +1,8 @@
 selenium
 openpyxl
-reportlab 
+reportlab
 webdriver-manager
+customtkinter
+Pillow
+matplotlib
+tkcalendar
