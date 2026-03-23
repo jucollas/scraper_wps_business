@@ -1,9 +1,44 @@
-1. lograr que el scraper lea el id order de wps
-2. implementar un base de datos sql para guardar las ordenes de manera local
-3. lograr que el scraper pueda leer correctamente las fechas de las ordenes
-4. implementar un sistema de sincronizacion para la informacion de las ordenes de la base de datos local y las que se encuentarn en wps web (la sincronizacion debe ser eficiente) 
-5. mejorar la generacion de reportes pdf y xlx
-6. mejorar la interfaz para poder seleccionar un reporte por mes
-7. mejorar los tiempos de scrapeo
-8. verificar compatibilidad con windows
-9. hacer un archivo de instalacion para windows
+WBS Order Manager - TODO técnico
+
+Hecho:
+- Historial del scraper mejorado con scroll, waits y reintentos.
+- Diagnóstico de errores por causa.
+- Upsert en DB corregido por whatsapp_order_id.
+- Migración SQLite ajustada.
+- PDF más legible y ordenado.
+- Logs mejorados en app y analíticas.
+- Corrección de cruce de estados en analíticas.
+
+Pendiente:
+- Probar visualmente el PDF con reportlab instalado.
+- Validar en cuenta real si WhatsApp deja ver historial antiguo.
+- Ajustar estilos PDF para textos muy largos.
+
+Sync actual:
+- Abre pedidos.
+- Carga historial.
+- Extrae ID de WhatsApp o usa hash fallback.
+- Hace merge en DB.
+- Actualiza UI y analíticas.
+
+Campos clave:
+- id
+- whatsapp_order_id
+- cliente
+- producto
+- monto
+- fecha
+- estado
+- synced_at
+
+Falta probar:
+- PDF con muchos pedidos.
+- Saltos de página.
+- Consistencia entre panel, exportación y analíticas.
+- Estados no estándar.
+
+Backlog:
+- reporte por mes
+- mejorar tiempos de scrapeo
+- compatibilidad con Windows
+- instalador para Windows

@@ -4,10 +4,12 @@
 """Genera reportes en Excel (.xlsx) y PDF a partir de una lista de órdenes."""
 
 import os
+import logging
 from datetime import date, datetime
 from collections import Counter
 
 _REPORTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "reportes")
+logger = logging.getLogger(__name__)
 
 try:
     import openpyxl
@@ -53,6 +55,25 @@ class Exporter:
         "Cancelado":  _CANC,
     }
 
+    @staticmethod
+    def _normalize_orders(orders: list[dict]) -> list[dict]:
+        """Normaliza registros para evitar fallos de render por claves o tipos inválidos."""
+        normalized = []
+        for o in orders:
+            try:
+                monto = float(o.get("monto", 0.0))
+            except (TypeError, ValueError):
+                monto = 0.0
+            normalized.append({
+                "id": o.get("id", ""),
+                "cliente": o.get("cliente", "Desconocido"),
+                "producto": o.get("producto", "Sin descripción"),
+                "fecha": o.get("fecha", date.today().isoformat()),
+                "monto": monto,
+                "estado": o.get("estado", "Desconocido"),
+            })
+        return normalized
+
     # ── Excel ─────────────────────────────────────────────────────────────────
     def to_excel(self, orders: list[dict],
                  date_from: str = "", date_to: str = "") -> tuple[bool, str]:
@@ -60,6 +81,9 @@ class Exporter:
             return False, "Instala openpyxl:\npip install openpyxl"
         if not orders:
             return False, "No hay órdenes para exportar."
+
+        orders = self._normalize_orders(orders)
+        logger.info("[EXPORT][Excel] Inicio exportación: orders=%s rango=%s..%s", len(orders), date_from, date_to)
 
         os.makedirs(self.REPORTS_DIR, exist_ok=True)
         ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -70,6 +94,7 @@ class Exporter:
         self._build_summary_sheet(wb, orders, date_from, date_to)
 
         wb.save(fname)
+        logger.info("[EXPORT][Excel] Archivo generado: %s", fname)
         self._open_file(fname)
         return True, f"Archivo guardado:\n{fname}"
 
@@ -205,6 +230,9 @@ class Exporter:
         if not orders:
             return False, "No hay órdenes para exportar."
 
+        orders = self._normalize_orders(orders)
+        logger.info("[EXPORT][PDF] Inicio exportación: orders=%s rango=%s..%s", len(orders), date_from, date_to)
+
         os.makedirs(self.REPORTS_DIR, exist_ok=True)
         ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         fname = os.path.join(self.REPORTS_DIR, f"reporte_{ts}.pdf")
@@ -226,6 +254,15 @@ class Exporter:
             "WBSFooter", parent=styles["Normal"],
             textColor=colors.HexColor("#9CA3AF"),
             fontSize=8, alignment=TA_RIGHT)
+        cell_text_style = ParagraphStyle(
+            "WBSCell", parent=styles["Normal"],
+            fontSize=8, leading=9,
+            textColor=colors.HexColor("#1F2937"))
+        cell_num_style = ParagraphStyle(
+            "WBSCellNum", parent=styles["Normal"],
+            fontSize=8, leading=9,
+            alignment=TA_RIGHT,
+            textColor=colors.HexColor("#1F2937"))
 
         elems = []
 
@@ -264,21 +301,27 @@ class Exporter:
         elems.append(Spacer(1, 14))
 
         # Tabla de órdenes
-        col_widths_pdf = [2.2*cm, 3.8*cm, 4*cm, 2.4*cm, 2.2*cm, 2.8*cm]
+        # Mantener ancho total por debajo del área imprimible (~18cm con márgenes).
+        col_widths_pdf = [2.2*cm, 3.4*cm, 4.8*cm, 2.2*cm, 2.1*cm, 3.0*cm]
         data = [self.HEADERS]
         for o in orders:
             data.append([
-                o["id"], o["cliente"], o["producto"],
-                o["fecha"], f"${o['monto']:,.2f}", o["estado"]
+                Paragraph(str(o["id"]), cell_text_style),
+                Paragraph(str(o["cliente"]), cell_text_style),
+                Paragraph(str(o["producto"]), cell_text_style),
+                Paragraph(str(o["fecha"]), cell_text_style),
+                Paragraph(f"${o['monto']:,.2f}", cell_num_style),
+                Paragraph(str(o["estado"]), cell_text_style),
             ])
-        data.append(["", "", "", "TOTAL", f"${total:,.2f}", ""])
+        data.append([
+            "", "", "",
+            Paragraph("TOTAL", cell_text_style),
+            Paragraph(f"${total:,.2f}", cell_num_style),
+            "",
+        ])
 
-        estado_col_fills = []
-        for o in orders:
-            hex_col = self.ESTADO_COLORS.get(o["estado"], _WHITE)
-            estado_col_fills.append(colors.HexColor(f"#{hex_col}"))
-
-        tbl = Table(data, colWidths=col_widths_pdf, repeatRows=1)
+        tbl = Table(data, colWidths=col_widths_pdf, repeatRows=1, splitByRow=1)
+        tbl.hAlign = "LEFT"
 
         tbl_style = [
             # Encabezado
@@ -286,10 +329,16 @@ class Exporter:
             ("TEXTCOLOR",  (0, 0),  (-1, 0),  colors.white),
             ("FONTNAME",   (0, 0),  (-1, 0),  "Helvetica-Bold"),
             ("FONTSIZE",   (0, 0),  (-1, 0),  9),
-            ("ALIGN",      (0, 0),  (-1, -1), "CENTER"),
+            ("ALIGN",      (0, 0),  (-1, 0), "CENTER"),
+            ("ALIGN",      (0, 1),  (2, -1), "LEFT"),
+            ("ALIGN",      (3, 1),  (3, -1), "CENTER"),
+            ("ALIGN",      (4, 1),  (4, -1), "RIGHT"),
+            ("ALIGN",      (5, 1),  (5, -1), "CENTER"),
             ("VALIGN",     (0, 0),  (-1, -1), "MIDDLE"),
-            ("TOPPADDING", (0, 0),  (-1, -1), 5),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+            ("TOPPADDING", (0, 0),  (-1, -1), 4),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ("LEFTPADDING", (0, 0), (-1, -1), 5),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 5),
             # Filas alternas
             ("ROWBACKGROUNDS", (0, 1), (-1, -2),
              [colors.white, colors.HexColor(f"#{_LGREY}")]),
@@ -300,6 +349,17 @@ class Exporter:
             ("GRID",       (0, 0),  (-1, -1), 0.3, colors.HexColor("#E5E7EB")),
             ("LINEBELOW",  (0, 0),  (-1, 0),  1,   colors.white),
         ]
+
+        # Resaltar celda de estado por fila sin romper el zebra striping base.
+        for row_idx, o in enumerate(orders, start=1):
+            hex_col = self.ESTADO_COLORS.get(o["estado"], _WHITE)
+            tbl_style.append((
+                "BACKGROUND",
+                (5, row_idx),
+                (5, row_idx),
+                colors.HexColor(f"#{hex_col}")
+            ))
+
         tbl.setStyle(TableStyle(tbl_style))
         elems.append(tbl)
 
@@ -311,7 +371,21 @@ class Exporter:
             f"WBS Order Manager  ·  {datetime.now().strftime('%d/%m/%Y %H:%M')}",
             footer_style))
 
-        doc.build(elems)
+        def _draw_page(canvas, _doc):
+            canvas.saveState()
+            canvas.setFont("Helvetica", 8)
+            canvas.setFillColor(colors.HexColor("#9CA3AF"))
+            canvas.drawString(doc.leftMargin, 0.8 * cm,
+                              "WBS Order Manager · Reporte de pedidos")
+            canvas.drawRightString(
+                A4[0] - doc.rightMargin,
+                0.8 * cm,
+                f"Página {canvas.getPageNumber()}"
+            )
+            canvas.restoreState()
+
+        doc.build(elems, onFirstPage=_draw_page, onLaterPages=_draw_page)
+        logger.info("[EXPORT][PDF] Archivo generado: %s", fname)
         self._open_file(fname)
         return True, f"Archivo guardado:\n{fname}"
 

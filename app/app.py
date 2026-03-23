@@ -4,6 +4,7 @@
 import io
 import os
 import sys
+import logging
 import tkinter as tk
 from tkinter import ttk, messagebox
 from datetime import datetime, date
@@ -34,11 +35,13 @@ try:
 except ImportError:
     CAL_OK = False
 
-from config import SAMPLE_ORDERS
+from config import SAMPLE_ORDERS, DEBUG_VISUAL
 from browser  import BrowserManager
 from scraper  import OrderScraper
 from exporter import Exporter, EXCEL_OK, PDF_OK
 from database import Database
+
+logger = logging.getLogger(__name__)
 
 ctk.set_appearance_mode("light")
 ctk.set_default_color_theme("blue")
@@ -605,21 +608,28 @@ class App(ctk.CTk):
         try:
             year = int(self._an_year_var.get())
         except (ValueError, AttributeError):
+            logger.warning("[ANALYTICS] Año inválido en filtro de analítica")
             return []
         month_str = self._an_month_var.get()
         prefix = f"{year:04d}"
         if month_str != "Todos":
             m_num  = MESES.index(month_str) + 1
             prefix = f"{year:04d}-{m_num:02d}"
-        return [o for o in self.orders if o["fecha"].startswith(prefix)]
+        analytics_orders = [o for o in self.orders if o["fecha"].startswith(prefix)]
+        logger.info(
+            "[ANALYTICS] Scope=%s total_orders=%s analytics_orders=%s",
+            prefix, len(self.orders), len(analytics_orders))
+        return analytics_orders
 
     def _refresh_analytics(self):
         if not MATPLOTLIB_OK:
             self._show_no_matplotlib_msg()
             return
         orders = self._get_analytics_orders()
+        self._validate_orders_for_analytics(orders)
         year   = int(self._an_year_var.get())
         total_rev = sum(o["monto"] for o in orders)
+        logger.info("[ANALYTICS] Refresh year=%s count=%s revenue=%.2f", year, len(orders), total_rev)
         self._an_lbl_info.config(
             text=f"{len(orders)} ordenes  ·  ${total_rev:,.2f} total")
         self._refresh_analytics_kpis(orders)
@@ -627,10 +637,38 @@ class App(ctk.CTk):
         self._draw_status_pie(orders)
         self._draw_top_products(orders)
 
+    def _validate_orders_for_analytics(self, orders: list):
+        """Traza consistencia entre pedidos usados y métricas calculables."""
+        if not orders:
+            return
+        missing_required = 0
+        invalid_amount = 0
+        seen_ids = set()
+        duplicate_ids = 0
+
+        for o in orders:
+            if not all(k in o for k in ("id", "fecha", "monto", "estado", "cliente", "producto")):
+                missing_required += 1
+            try:
+                float(o.get("monto", 0.0))
+            except (TypeError, ValueError):
+                invalid_amount += 1
+
+            oid = o.get("id")
+            if oid in seen_ids:
+                duplicate_ids += 1
+            else:
+                seen_ids.add(oid)
+
+        logger.info(
+            "[ANALYTICS][RELATION] pedidos=%s faltantes=%s montos_invalidos=%s ids_duplicados=%s",
+            len(orders), missing_required, invalid_amount, duplicate_ids)
+
     def _refresh_analytics_kpis(self, orders: list):
         if not orders:
             for k in self._an_kpi_vars:
                 self._an_kpi_vars[k].set("Sin datos")
+            logger.info("[ANALYTICS] KPIs sin datos para el filtro actual")
             return
         total  = sum(o["monto"] for o in orders)
         count  = len(orders)
@@ -650,6 +688,9 @@ class App(ctk.CTk):
             self._an_kpi_vars["mejor_cliente"].set(bc[:22] + "..." if len(bc) > 22 else bc)
         tasa = (complt / count * 100) if count else 0
         self._an_kpi_vars["tasa_comp"].set(f"{tasa:.1f}%")
+        logger.info(
+            "[ANALYTICS] KPIs count=%s total=%.2f completadas=%s tasa=%.1f%%",
+            count, total, complt, tasa)
 
     def _draw_monthly_revenue(self, orders: list, year: int):
         self._clear_frame(self._chart_monthly)
@@ -703,13 +744,18 @@ class App(ctk.CTk):
 
     def _draw_status_pie(self, orders: list):
         self._clear_frame(self._chart_pie)
-        cnt_map = {"Completado": 0, "Pendiente": 0, "Cancelado": 0}
+        cnt_map = {"Completado": 0, "Pendiente": 0, "Cancelado": 0, "Desconocido": 0}
         for o in orders:
-            key = o["estado"] if o["estado"] in cnt_map else "Pendiente"
+            key = o["estado"] if o["estado"] in cnt_map else "Desconocido"
             cnt_map[key] += 1
         labels     = [k for k, v in cnt_map.items() if v > 0]
         sizes      = [v for v in cnt_map.values()  if v > 0]
-        pie_colors = {"Completado": SUCCESS, "Pendiente": WARNING, "Cancelado": DANGER}
+        pie_colors = {
+            "Completado": SUCCESS,
+            "Pendiente": WARNING,
+            "Cancelado": DANGER,
+            "Desconocido": TEXT_MUTED,
+        }
 
         hdr = tk.Frame(self._chart_pie, bg=CARD_BG)
         hdr.pack(fill="x", padx=16, pady=(14, 0))
@@ -1133,31 +1179,99 @@ class App(ctk.CTk):
         threading.Thread(target=self._do_sync, daemon=True).start()
 
     def _do_sync(self):
+        """Realiza sincronización manual de órdenes."""
         try:
+            self._set_status_text("⏳ Iniciando sincronización...")
+            logger.info("[SYNC] Inicio sincronización manual")
+            
+            if not self.driver or not self.connected:
+                self.after(0, lambda: messagebox.showwarning(
+                    "No conectado",
+                    "Primero debes conectar tu cuenta de WhatsApp Business"))
+                return
+            
             scraper = OrderScraper(
                 self.driver,
                 on_status=lambda msg: self.after(
                     0, lambda m=msg: self._set_status_text(m)))
+            
             new_orders = scraper.fetch()
+            
+            if not new_orders:
+                diag = getattr(scraper, "last_run_diagnostics", {}) or {}
+                dstatus = diag.get("status", "unknown")
+                history = (diag.get("history") or {})
+                hstatus = history.get("status", "unknown")
+                h_initial = int(history.get("new_orders_visible_initial", 0) or 0)
+                h_hist = int(history.get("historical_orders_found", 0) or 0)
+
+                logger_msg = f"[SYNC] Sin órdenes. diagnostics={diag}"
+                import logging
+                logging.warning(logger_msg)
+
+                if dstatus in ("session_error", "navigation_error"):
+                    msg = "⚠️  No se pudo acceder a pedidos por sesión/navegación. Revisa estado de WhatsApp Business."
+                elif dstatus == "timeout":
+                    msg = "⚠️  Timeout cargando panel de pedidos. Intenta nuevamente."
+                elif hstatus == "no_more_history":
+                    msg = "ℹ️  No se detectó más historial al hacer scroll. Puede ser límite real de WhatsApp Business para esta sesión."
+                elif hstatus == "history_limit_reached":
+                    msg = "ℹ️  Se alcanzó el límite configurable de carga de historial. Ajusta HISTORY_MAX_* en config si deseas más alcance."
+                elif hstatus == "no_orders_or_access":
+                    msg = "⚠️  No hay pedidos visibles o no hay acceso al historial en esta sesión."
+                else:
+                    msg = "⚠️  No se obtuvieron órdenes. Revisa logs para diagnóstico detallado."
+
+                if h_initial or h_hist:
+                    msg = f"{msg} (visibles iniciales: {h_initial}, históricos cargados: {h_hist})"
+
+                self.after(0, lambda m=msg: self._set_status_text(m))
+                return
+            
+            # Sincronizar
             new_c, upd_c = self._db.merge(new_orders)
-            all_orders   = self._db.get_all()
+            logger.info("[SYNC][DB] merge completado nuevas=%s actualizadas=%s", new_c, upd_c)
+            
+            # Obtener estadísticas
+            stats = self._db.get_sync_stats()
+            diag = getattr(scraper, "last_run_diagnostics", {}) or {}
+            history = (diag.get("history") or {})
+            h_initial = int(history.get("new_orders_visible_initial", 0) or 0)
+            h_hist = int(history.get("historical_orders_found", 0) or 0)
+            h_stop = history.get("stop_reason", "n/a")
+            
+            # Recargar UI
+            all_orders = self._db.get_all()
             self.after(0, lambda: self._load_orders(all_orders))
             self.after(0, self._apply_filter)
+            
             ts = datetime.now().strftime("%d/%m/%Y %H:%M")
-            self.after(0, lambda: self._set_status_text(
-                f"Sync: +{new_c} nuevas, {upd_c} actualizadas · {ts}"))
+            msg = (f"✅ Sync exitoso: +{new_c} nuevas, {upd_c} actualizadas "
+                     f"· hist inicial: {h_initial}, hist cargado: {h_hist}, stop: {h_stop} "
+                     f"· ({stats['with_whatsapp_id']}/{stats['total']} con ID real) · {ts}")
+            self.after(0, lambda: self._set_status_text(msg))
+            
         except Exception as e:
             self.after(0, lambda: messagebox.showerror("Error de sync", str(e)))
+            import logging
+            logging.exception("Error en _do_sync:")
         finally:
             self.after(0, lambda: self.btn_sync.configure(
-                state="normal", text="Sincronizar pedidos"))
+                state="normal", text="🔄  Sincronizar pedidos"))
 
     def _open_whatsapp(self):
         try:
             with self._driver_lock:
-                self.driver, browser = self._browser.build(headless=True)
+                headless_mode = not DEBUG_VISUAL
+                logger.info("[SESSION] Abriendo WhatsApp headless=%s (DEBUG_VISUAL=%s)", headless_mode, DEBUG_VISUAL)
+                if headless_mode:
+                    logger.warning("[SESSION] Modo visual DEBUG desactivado. Para ver el navegador en vivo usa DEBUG=true o DEBUG_VISUAL=true.")
+                else:
+                    logger.info("[SESSION] Modo visual DEBUG activo: navegador visible y pausas de depuración habilitadas.")
+                self.driver, browser = self._browser.build(headless=headless_mode)
                 self.driver.set_window_size(1280, 900)
                 self.driver.get("https://web.whatsapp.com")
+                logger.info("[SESSION] WhatsApp abierto en navegador=%s", browser)
 
             self.after(0, lambda: self._set_status_text(f"Navegador interno: {browser}"))
             self.after(0, lambda: self._set_connection_state("waiting"))
@@ -1199,17 +1313,24 @@ class App(ctk.CTk):
                     on_status=lambda msg: self.after(
                         0, lambda m=msg: self._set_status_text(m)))
                 new_orders = scraper.fetch()
+                if not new_orders:
+                    diag = getattr(scraper, "last_run_diagnostics", {}) or {}
+                    import logging
+                    logging.warning("[SYNC-INIT] Sin órdenes en primer sync. diagnostics=%s", diag)
                 new_c, upd_c = self._db.merge(new_orders)
                 all_orders   = self._db.get_all()
                 self.after(0, lambda: self._load_orders(all_orders))
                 self.after(0, lambda: self._on_connected(new_c, upd_c))
             except Exception as sync_error:
                 self.after(0, lambda: self.btn_sync.configure(
-                    state="normal", text="Sincronizar pedidos"))
+                    state="normal", text="🔄  Sincronizar pedidos"))
                 self.after(0, lambda: self._set_status_text(
-                    "WhatsApp vinculado. La sincronización inicial falló."))
+                    "✅ WhatsApp vinculado. Sync inicial falló - intenta manualmente."))
                 self.after(0, lambda: messagebox.showerror(
-                    "Error de sync inicial", str(sync_error)))
+                    "Error en sincronización inicial",
+                    f"WhatsApp está conectado pero falló el primer sync.\n\n{str(sync_error)}\n\nPuedes intentar la sincronización manual después."))
+                import logging
+                logging.exception("Error en sincronización inicial:")
         except Exception as e:
             self.after(0, self._hide_qr_overlay)
             self._dispose_driver()
@@ -1227,11 +1348,19 @@ class App(ctk.CTk):
         self._apply_filter()
 
     def _on_connected(self, new_c: int = 0, upd_c: int = 0):
+        """Actualiza UI cuando la sesión de WhatsApp está conectada."""
         self._hide_qr_overlay()
         ts = datetime.now().strftime("%d/%m/%Y %H:%M")
+        
+        # Obtener estadísticas de sincronización
+        stats = self._db.get_sync_stats()
+        
+        msg = (f"✅ Conectado · +{new_c} nuevas, {upd_c} actualizadas "
+               f"({stats['with_whatsapp_id']}/{stats['total']} con ID real) · {ts}")
+        
         self._set_connection_state("connected")
-        self._set_status_text(f"+{new_c} nuevas, {upd_c} actualizadas · {ts}")
-        self.btn_sync.configure(state="normal", text="Sincronizar pedidos")
+        self._set_status_text(msg)
+        self.btn_sync.configure(state="normal", text="🔄  Sincronizar pedidos")
         self._apply_filter()
 
     def _disconnect(self):
@@ -1252,6 +1381,12 @@ class App(ctk.CTk):
     # ──────────────────────────────────────────────────────────────────────────
     def _load_orders(self, orders: list):
         self.orders = orders
+        if orders:
+            min_f = min(o.get("fecha", "9999-12-31") for o in orders)
+            max_f = max(o.get("fecha", "0000-01-01") for o in orders)
+            logger.info("[ORDERS] Carga en memoria: total=%s rango=%s..%s", len(orders), min_f, max_f)
+        else:
+            logger.info("[ORDERS] Carga en memoria vacía")
         if self._current_page == "analytics":
             self._refresh_analytics()
 
@@ -1328,6 +1463,7 @@ class App(ctk.CTk):
             messagebox.showerror("Fecha invalida", "Usa el formato YYYY-MM-DD")
             return
         filtered = [o for o in self.orders if d_from <= o["fecha"] <= d_to]
+        logger.info("[ORDERS] Filtro panel aplicado: %s..%s => %s registros", d_from, d_to, len(filtered))
         self._refresh_table(filtered)
         self._refresh_kpis(filtered)
         self.lbl_count.config(
@@ -1383,21 +1519,27 @@ class App(ctk.CTk):
     def _get_filtered_orders(self) -> list:
         d_from = self._get_date_str(self.entry_from)
         d_to   = self._get_date_str(self.entry_to)
-        return [o for o in self.orders if d_from <= o["fecha"] <= d_to]
+        filtered = [o for o in self.orders if d_from <= o["fecha"] <= d_to]
+        logger.info("[ORDERS] Dataset exportable: %s..%s => %s registros", d_from, d_to, len(filtered))
+        return filtered
 
     # ──────────────────────────────────────────────────────────────────────────
     # EXPORTACION
     # ──────────────────────────────────────────────────────────────────────────
     def _export_excel(self):
+        export_orders = self._get_filtered_orders()
+        logger.info("[EXPORT] Excel solicitado con %s órdenes", len(export_orders))
         ok, msg = self._exporter.to_excel(
-            self._get_filtered_orders(),
+            export_orders,
             self._get_date_str(self.entry_from),
             self._get_date_str(self.entry_to))
         (messagebox.showinfo if ok else messagebox.showerror)("Excel", msg)
 
     def _export_pdf(self):
+        export_orders = self._get_filtered_orders()
+        logger.info("[EXPORT] PDF solicitado con %s órdenes", len(export_orders))
         ok, msg = self._exporter.to_pdf(
-            self._get_filtered_orders(),
+            export_orders,
             self._get_date_str(self.entry_from),
             self._get_date_str(self.entry_to))
         (messagebox.showinfo if ok else messagebox.showerror)("PDF", msg)
