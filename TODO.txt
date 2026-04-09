@@ -8,11 +8,13 @@ Hecho:
 - PDF más legible y ordenado.
 - Logs mejorados en app y analíticas.
 - Corrección de cruce de estados en analíticas.
+- Ajustar estilos PDF para textos muy largos.
+- Probar visualmente el PDF con reportlab instalado.
 
 Pendiente:
-- Probar visualmente el PDF con reportlab instalado.
+
 - Validar en cuenta real si WhatsApp deja ver historial antiguo.
-- Ajustar estilos PDF para textos muy largos.
+
 
 Sync actual:
 - Abre pedidos.

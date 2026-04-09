@@ -7,6 +7,7 @@ import os
 import logging
 from datetime import date, datetime
 from collections import Counter
+from xml.sax.saxutils import escape
 
 _REPORTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "reportes")
 logger = logging.getLogger(__name__)
@@ -73,6 +74,11 @@ class Exporter:
                 "estado": o.get("estado", "Desconocido"),
             })
         return normalized
+
+    @staticmethod
+    def _pdf_text(value: object) -> str:
+        """Escapa texto para ReportLab y evita que caracteres especiales rompan el PDF."""
+        return escape("" if value is None else str(value))
 
     # ── Excel ─────────────────────────────────────────────────────────────────
     def to_excel(self, orders: list[dict],
@@ -256,11 +262,15 @@ class Exporter:
             fontSize=8, alignment=TA_RIGHT)
         cell_text_style = ParagraphStyle(
             "WBSCell", parent=styles["Normal"],
-            fontSize=8, leading=9,
+            fontSize=7.6, leading=9,
+            splitLongWords=True,
+            wordWrap="CJK",
             textColor=colors.HexColor("#1F2937"))
         cell_num_style = ParagraphStyle(
             "WBSCellNum", parent=styles["Normal"],
-            fontSize=8, leading=9,
+            fontSize=7.6, leading=9,
+            splitLongWords=True,
+            wordWrap="CJK",
             alignment=TA_RIGHT,
             textColor=colors.HexColor("#1F2937"))
 
@@ -302,16 +312,16 @@ class Exporter:
 
         # Tabla de órdenes
         # Mantener ancho total por debajo del área imprimible (~18cm con márgenes).
-        col_widths_pdf = [2.2*cm, 3.4*cm, 4.8*cm, 2.2*cm, 2.1*cm, 3.0*cm]
+        col_widths_pdf = [2.3*cm, 3.8*cm, 5.1*cm, 2.0*cm, 1.9*cm, 2.5*cm]
         data = [self.HEADERS]
         for o in orders:
             data.append([
-                Paragraph(str(o["id"]), cell_text_style),
-                Paragraph(str(o["cliente"]), cell_text_style),
-                Paragraph(str(o["producto"]), cell_text_style),
-                Paragraph(str(o["fecha"]), cell_text_style),
+                Paragraph(self._pdf_text(o["id"]), cell_text_style),
+                Paragraph(self._pdf_text(o["cliente"]), cell_text_style),
+                Paragraph(self._pdf_text(o["producto"]), cell_text_style),
+                Paragraph(self._pdf_text(o["fecha"]), cell_text_style),
                 Paragraph(f"${o['monto']:,.2f}", cell_num_style),
-                Paragraph(str(o["estado"]), cell_text_style),
+                Paragraph(self._pdf_text(o["estado"]), cell_text_style),
             ])
         data.append([
             "", "", "",
