@@ -192,32 +192,32 @@ class OrderScraper:
         logger.info("[NAVIGATION][tools] Buscando Herramientas")
 
         candidates = [
-            # 1) texto visible exacto (español)
-            (By.XPATH, '//*[normalize-space(text())="Herramientas"]', 'exact:Herramientas'),
-            (By.XPATH, '//*[normalize-space(text())="Herramientas de empresa"]', 'exact:Herramientas de empresa'),
-            # 2) texto visible contains
-            (By.XPATH, '//*[contains(translate(normalize-space(text()), "ABCDEFGHIJKLMNOPQRSTUVWXYZÁÉÍÓÚÜ", "abcdefghijklmnopqrstuvwxyzáéíóúü"), "herramient")]', 'contains:herramient'),
-            # 3) aria-label
+            # 1) aria-label (Más preciso)
             (By.CSS_SELECTOR, '[aria-label="Herramientas"]', 'aria:Herramientas'),
             (By.CSS_SELECTOR, '[aria-label="Herramientas de empresa"]', 'aria:Herramientas de empresa'),
             (By.CSS_SELECTOR, '[aria-label*="Herramient"]', 'aria:*Herramient*'),
-            # 4) title
+            # 2) title
             (By.CSS_SELECTOR, '[title="Herramientas"]', 'title:Herramientas'),
             (By.CSS_SELECTOR, '[title="Herramientas de empresa"]', 'title:Herramientas de empresa'),
             (By.CSS_SELECTOR, '[title*="Herramient"]', 'title:*Herramient*'),
+            # 3) texto visible exacto (español)
+            (By.XPATH, '//*[normalize-space(text())="Herramientas"]', 'exact:Herramientas'),
+            (By.XPATH, '//*[normalize-space(text())="Herramientas de empresa"]', 'exact:Herramientas de empresa'),
+            # 4) texto visible contains
+            (By.XPATH, '//*[contains(translate(normalize-space(text()), "ABCDEFGHIJKLMNOPQRSTUVWXYZÁÉÍÓÚÜ", "abcdefghijklmnopqrstuvwxyzáéíóúü"), "herramient")]', 'contains:herramient'),
             # Fallback inglés
-            (By.XPATH, '//*[normalize-space(text())="Business tools"]', 'exact:Business tools'),
-            (By.XPATH, '//*[contains(translate(normalize-space(text()), "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"), "business tool")]', 'contains:business tool'),
             (By.CSS_SELECTOR, '[aria-label="Business tools"]', 'aria:Business tools'),
             (By.CSS_SELECTOR, '[aria-label*="business"]', 'aria:*business*'),
             (By.CSS_SELECTOR, '[title="Business tools"]', 'title:Business tools'),
             (By.CSS_SELECTOR, '[title*="business"]', 'title:*business*'),
+            (By.XPATH, '//*[normalize-space(text())="Business tools"]', 'exact:Business tools'),
+            (By.XPATH, '//*[contains(translate(normalize-space(text()), "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"), "business tool")]', 'contains:business tool'),
         ]
 
         clicked = self._try_click_candidates(candidates, step='tools', retries=2, wait_seconds=2)
         if clicked:
             logger.info("[NAVIGATION] Encontrado: Herramientas")
-            time.sleep(0.25)
+            time.sleep(1.5)
             return True
 
         logger.error("[NAVIGATION][tools] No se encontró ninguna variante válida de Herramientas/Herramientas de empresa tras reintentos.")
@@ -234,23 +234,23 @@ class OrderScraper:
         logger.info("[NAVIGATION] Entrando a Pedidos")
 
         candidates = [
-            # 1) texto visible exacto (español)
-            (By.XPATH, '//*[normalize-space(text())="Pedidos"]', 'exact:Pedidos'),
-            # 2) texto visible contains
-            (By.XPATH, '//*[contains(translate(normalize-space(text()), "ABCDEFGHIJKLMNOPQRSTUVWXYZÁÉÍÓÚÜ", "abcdefghijklmnopqrstuvwxyzáéíóúü"), "pedido")]', 'contains:pedido'),
-            # 3) aria-label
+            # 1) aria-label (Más seguro)
             (By.CSS_SELECTOR, '[aria-label="Pedidos"]', 'aria:Pedidos'),
             (By.CSS_SELECTOR, '[aria-label*="Pedido"]', 'aria:*Pedido*'),
-            # 4) title
+            # 2) title
             (By.CSS_SELECTOR, '[title="Pedidos"]', 'title:Pedidos'),
             (By.CSS_SELECTOR, '[title*="Pedido"]', 'title:*Pedido*'),
+            # 3) texto visible exacto (español)
+            (By.XPATH, '//*[normalize-space(text())="Pedidos"]', 'exact:Pedidos'),
+            # 4) texto visible contains
+            (By.XPATH, '//*[contains(translate(normalize-space(text()), "ABCDEFGHIJKLMNOPQRSTUVWXYZÁÉÍÓÚÜ", "abcdefghijklmnopqrstuvwxyzáéíóúü"), "pedido")]', 'contains:pedido'),
             # Fallback inglés
-            (By.XPATH, '//*[normalize-space(text())="Orders"]', 'exact:Orders'),
-            (By.XPATH, '//*[contains(translate(normalize-space(text()), "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"), "order")]', 'contains:order'),
             (By.CSS_SELECTOR, '[aria-label="Orders"]', 'aria:Orders'),
             (By.CSS_SELECTOR, '[aria-label*="Order"]', 'aria:*Order*'),
             (By.CSS_SELECTOR, '[title="Orders"]', 'title:Orders'),
             (By.CSS_SELECTOR, '[title*="Order"]', 'title:*Order*'),
+            (By.XPATH, '//*[normalize-space(text())="Orders"]', 'exact:Orders'),
+            (By.XPATH, '//*[contains(translate(normalize-space(text()), "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"), "order")]', 'contains:order'),
         ]
 
         clicked = self._try_click_candidates(candidates, step='orders', retries=2, wait_seconds=2)
@@ -315,6 +315,13 @@ class OrderScraper:
 
                 logger.info("[NAVIGATION][%s] selector encontrado=%s elementos=%s", step, label, len(elements))
                 for idx, el in enumerate(elements):
+                    try:
+                        if not el.is_displayed():
+                            logger.debug("[NAVIGATION][%s] omitiendo elemento oculto selector=%s idx=%s", step, label, idx)
+                            continue
+                    except Exception:
+                        pass
+                        
                     target = self._find_clickable_target(el)
                     if target is None:
                         logger.debug("[NAVIGATION][%s] elemento sin target clickeable selector=%s idx=%s", step, label, idx)
@@ -644,18 +651,17 @@ class OrderScraper:
 
     def _wait_orders_panel(self) -> bool:
         selectors = [
-            'button.x6s0dn4.x78zum5.xvt47uu',
-            'div[role="region"]',
-            'div[data-testid="orders-list"]',
+            '[aria-label="Lista de pedidos"]',
+            '[aria-label="Order list"]',
             'div.x1280gxy.x94v8gs.xw2csxc.x1odjw0f.x1n2onr6',
+            'div[data-testid="orders-list"]',
         ]
-        for sel in selectors:
-            try:
-                self._wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, sel)))
-                return True
-            except TimeoutException:
-                continue
-        return False
+        combined_sel = ", ".join(selectors)
+        try:
+            self._wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, combined_sel)))
+            return True
+        except TimeoutException:
+            return False
 
     def _wait_spinners(self, timeout_seconds: int = 3600):
         """
