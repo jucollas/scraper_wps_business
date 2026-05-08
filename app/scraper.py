@@ -89,6 +89,10 @@ class OrderScraper:
         self.last_run_diagnostics = {"status": "started"}
         self._trace_step("fetch", "inicio extracción")
         self._debug_pause("fetch:start")
+        
+        # Verificar y esperar si hay una sincronización profunda en curso (Ajustes)
+        self._check_and_wait_for_full_sync()
+        
         if self._is_orders_view_open():
             logger.info("[NAVIGATION] Vista Pedidos abierta")
             self._trace_step("navigation", "pedidos ya estaba abierto")
@@ -111,6 +115,72 @@ class OrderScraper:
         self._trace_step("navigation", "pedidos abierto")
         self._debug_pause("orders_opened")
         return self._read_order_list()
+
+    def _check_and_wait_for_full_sync(self):
+        """
+        Abre la configuración, verifica si hay una sincronización de mensajes en curso,
+        y espera a que termine antes de continuar.
+        """
+        self._status("🔍 Verificando estado de sincronización profunda...")
+        try:
+            from selenium.webdriver.common.keys import Keys
+            from selenium.webdriver.common.action_chains import ActionChains
+            
+            # Enviar Ctrl+Alt+, para abrir Ajustes
+            ActionChains(self.driver).key_down(Keys.CONTROL).key_down(Keys.ALT).send_keys(',').key_up(Keys.ALT).key_up(Keys.CONTROL).perform()
+            time.sleep(2.0)
+            
+            # Buscar el texto "sincronizando" o un progress bar
+            sync_xpath = '//*[contains(translate(text(), "ABCDEFGHIJKLMNOPQRSTUVWXYZÁÉÍÓÚÜ", "abcdefghijklmnopqrstuvwxyzáéíóúü"), "sincronizando") or contains(translate(text(), "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"), "syncing")]'
+            
+            start_time = time.time()
+            is_syncing = False
+            
+            # Revisar si aparece el texto en el panel
+            try:
+                els = self.driver.find_elements(By.XPATH, sync_xpath)
+                for el in els:
+                    if el.is_displayed():
+                        is_syncing = True
+                        break
+            except Exception:
+                pass
+                
+            if is_syncing:
+                logger.info("[SYNC] Sincronización detectada en Ajustes. Esperando a que termine...")
+                # Esperar indeterminadamente (hasta 2 horas)
+                while time.time() - start_time < 7200:
+                    still_syncing = False
+                    try:
+                        els = self.driver.find_elements(By.XPATH, sync_xpath)
+                        for el in els:
+                            if el.is_displayed():
+                                still_syncing = True
+                                text = el.text
+                                import re
+                                match = re.search(r'(\d+)\s*%', text)
+                                if match:
+                                    self._status(f"⏳ Sincronizando historial completo... {match.group(1)}%")
+                                else:
+                                    self._status("⏳ Sincronizando historial completo...")
+                                break
+                    except Exception:
+                        pass
+                        
+                    if still_syncing:
+                        time.sleep(5)
+                    else:
+                        logger.info("[SYNC] Sincronización en Ajustes finalizada.")
+                        break
+            else:
+                logger.info("[SYNC] No se detectó sincronización profunda en curso.")
+                
+            # Cerrar Ajustes (ESC)
+            ActionChains(self.driver).send_keys(Keys.ESCAPE).perform()
+            time.sleep(1)
+            
+        except Exception as e:
+            logger.warning(f"[SYNC] Error verificando sincronización en Ajustes: {e}")
 
     # ── Paso 1: abrir Business Tools ─────────────────────────────────────────
     def _open_business_tools(self) -> bool:
@@ -185,11 +255,14 @@ class OrderScraper:
 
         clicked = self._try_click_candidates(candidates, step='orders', retries=2, wait_seconds=2)
         if clicked:
-            time.sleep(0.35)
+            time.sleep(1.0)
+            self._wait_spinners(timeout_seconds=60)
             if self._is_orders_view_open():
                 logger.info("[NAVIGATION] Vista Pedidos abierta")
                 return True
-            logger.warning("[NAVIGATION][orders] Se hizo click, pero la vista de pedidos no se confirmó aún.")
+            
+            logger.warning("[NAVIGATION][orders] Se hizo click, pero la vista de pedidos no se confirmó al 100%. Continuamos.")
+            return True
 
         logger.error("[NAVIGATION][orders] No se encontró la sección Pedidos/Orders tras todos los intentos.")
         self._status("⚠️  No se encontró la sección de Pedidos. Recuerda que necesitas tener WhatsApp Business para tener activados los pedidos.")
@@ -399,6 +472,9 @@ class OrderScraper:
             self.last_run_diagnostics = {"status": "timeout", "step": "wait_orders_panel"}
             return []
 
+        # Esperar indeterminadamente a que desaparezcan los spinners de sincronización
+        self._wait_spinners(timeout_seconds=3600)
+
         time.sleep(0.8)
         self._status("📦 Leyendo lista de pedidos…")
 
@@ -529,13 +605,12 @@ class OrderScraper:
         return orders
 
     def _build_fallback_id(self, order: dict, idx: int, detail_text: str) -> tuple[str, dict]:
-        """Construye fallback robusto por pedido usando máximo contexto disponible."""
+        """Construye fallback robusto por pedido evitando usar el índice o textos relativos que causan duplicados."""
         raw_text = str(order.get('_row_text', '')).strip()
         product = str(order.get('producto', '')).strip()
         payload = {
             'fields_used': [
-                'cliente', 'producto', 'monto', 'fecha',
-                'row_text', 'row_fingerprint', 'row_slot', 'idx', 'detail_text'
+                'cliente', 'producto', 'monto', 'fecha'
             ],
             'cliente': str(order.get('cliente', '')).strip(),
             'producto': product,
@@ -552,18 +627,13 @@ class OrderScraper:
             payload['producto'],
             payload['monto'],
             payload['fecha'],
-            payload['row_text'],
-            payload['row_fingerprint'],
-            payload['row_slot'],
-            payload['idx'],
-            payload['detail_text'],
         ])
         hash_id = hashlib.md5(material.encode()).hexdigest()[:14].upper()
         fallback_id = f"WA-{hash_id}"
         payload['raw_preview'] = payload['row_text'][:120]
         payload['detail_preview'] = payload['detail_text'][:120]
         logger.info(
-            "[Sync] fallback generado idx=%s fallback_id=%s source_row_slot=%s row_fp=%s",
+            "[Sync] fallback invariante generado idx=%s fallback_id=%s source_row_slot=%s",
             idx,
             fallback_id,
             payload['row_slot'],
@@ -585,6 +655,56 @@ class OrderScraper:
             except TimeoutException:
                 continue
         return False
+
+    def _wait_spinners(self, timeout_seconds: int = 3600):
+        """
+        Espera indeterminadamente hasta que desaparezcan las esferas de carga (spinners).
+        Garantiza que WhatsApp Web haya sincronizado completamente los mensajes y pedidos.
+        """
+        logger.info("[SYNC] Verificando si hay esferas de carga en curso...")
+        start = time.time()
+        selectors = [
+            '[role="progressbar"]',
+            'svg[viewBox="0 0 50 50"]',
+            'circle[stroke-dasharray]',
+            'div[title="Cargando"]',
+            'div[title="Loading"]',
+            '[data-testid="msg-loading"]',
+            '[data-testid="status-v3-spin"]',
+            '[data-testid="circular-progress"]'
+        ]
+        
+        sync_xpath = '//*[contains(translate(text(), "ABCDEFGHIJKLMNOPQRSTUVWXYZÁÉÍÓÚÜ", "abcdefghijklmnopqrstuvwxyzáéíóúü"), "sincronizando") or contains(translate(text(), "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"), "syncing")]'
+        
+        while time.time() - start < timeout_seconds:
+            spinners_active = False
+            for sel in selectors:
+                try:
+                    elements = self.driver.find_elements(By.CSS_SELECTOR, sel)
+                    for el in elements:
+                        if el.is_displayed():
+                            spinners_active = True
+                            break
+                except Exception:
+                    pass
+                if spinners_active:
+                    break
+            
+            if not spinners_active:
+                try:
+                    elements = self.driver.find_elements(By.XPATH, sync_xpath)
+                    for el in elements:
+                        if el.is_displayed():
+                            spinners_active = True
+                            break
+                except Exception:
+                    pass
+            
+            if spinners_active:
+                self._status("⏳ Sincronizando (esfera/texto de carga detectado)...")
+                time.sleep(3)
+            else:
+                break
 
     def _find_orders_container(self):
         selectors = [
@@ -981,6 +1101,8 @@ class OrderScraper:
                     logger.warning("[SCRAPER] Scroll falló (round=%s, attempt=%s): %s", round_no, attempt, exc)
                     time.sleep(0.2)
 
+            # Esperar a que la esfera de carga desaparezca tras el scroll
+            self._wait_spinners(timeout_seconds=3600)
             time.sleep(pause_seconds)
             current = _button_count()
             current_sigs = _visible_signatures()
@@ -1318,24 +1440,41 @@ class OrderScraper:
                     )
             order['monto'] = float(monto)
 
-            # Producto
-            producto = next(
-                (sp.get_attribute('title').strip()
-                 for sp in btn.find_elements(By.CSS_SELECTOR, 'span[title]')
-                 if sp.get_attribute('title')
-                 and not re.fullmatch(r'[\d\s\+\-]+', sp.get_attribute('title').strip())),
-                'Sin descripción')
-            order['producto'] = producto
-
             # Estado
             estado_raw = next(
                 (sp.text.strip()
                  for sp in reversed(btn.find_elements(By.TAG_NAME, 'span'))
                  if sp.text.strip()
                  and not (sp.get_attribute('title') or '')
-                 and not re.search(r'(COP|USD|\$)', sp.text, re.I)),
+                 and not re.search(r'(COP|USD|\$|€)', sp.text, re.I)),
                 '')
             order['estado'] = ESTADO_MAP.get(estado_raw.lower(), estado_raw or 'Desconocido')
+
+            # Producto (Deducción por exclusión del texto de la fila)
+            clean_product = row_text
+            if order.get('cliente') and order['cliente'] != 'Desconocido':
+                clean_product = clean_product.replace(order['cliente'], '', 1)
+            if selected_source:
+                clean_product = clean_product.replace(selected_source, '', 1)
+            if estado_raw:
+                clean_product = clean_product.replace(estado_raw, '', 1)
+            
+            # Limpiar caracteres especiales sobrantes en los bordes
+            clean_product = re.sub(r'^[^\w]+|[^\w]+$', '', clean_product.strip())
+            
+            if len(clean_product) > 0:
+                producto = clean_product
+            else:
+                # Fallback al viejo método si todo falla
+                producto = next(
+                    (sp.get_attribute('title').strip()
+                     for sp in btn.find_elements(By.CSS_SELECTOR, 'span[title]')
+                     if sp.get_attribute('title')
+                     and not re.fullmatch(r'[\d\s\+\-]+', sp.get_attribute('title').strip())
+                     and sp.get_attribute('title').strip() != order.get('cliente', '')),
+                    'Artículos de carrito')
+            
+            order['producto'] = producto
 
             return order
 
