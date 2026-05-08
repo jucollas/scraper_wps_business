@@ -637,7 +637,6 @@ class OrderScraper:
             idx,
             fallback_id,
             payload['row_slot'],
-            payload['row_fingerprint'],
         )
         return fallback_id, payload
 
@@ -1201,13 +1200,26 @@ class OrderScraper:
         
         try:
             btn.click()
-            time.sleep(0.5)
+            time.sleep(0.8)
             
-            # Buscar el panel de detalle con timeout generoso
             panel_wait = WebDriverWait(self.driver, 10)
             
             order_id = None
-            detail_text = self._capture_order_detail_text()
+            detail_text = ""
+            
+            # Polling: buscar hasta 6 veces (aprox 3 segundos) el panel con el ID
+            for attempt in range(6):
+                detail_text = self._capture_order_detail_text(silent=(attempt > 0))
+                if re.search(r'(?i)(pedido\s*n|order\s*id)\.?[°º]?\s*([A-Za-z0-9\-]{5,})', detail_text):
+                    break
+                
+                time.sleep(0.5)
+                # Si llegamos a la mitad de los intentos y no hay nada, reintentar el clic
+                if attempt == 2:
+                    try:
+                        btn.click()
+                    except Exception:
+                        pass
 
             # Intentar múltiples estrategias centradas en contexto de detalle e ID real.
             search_strategies = [
@@ -1278,8 +1290,24 @@ class OrderScraper:
                 if order_id:
                     break
 
-            # Estrategia adicional: buscar en atributos HTML estables.
-            if not order_id:
+            # Estrategia adicional: Buscar directamente en detail_text usando regex
+            if not order_id and detail_text:
+                for m in re.finditer(r'(?i)pedido\s*n\.?[°º]?\s*([A-Za-z0-9\-]{5,})', detail_text):
+                    cand = m.group(1)
+                    ok, reason = self._is_reliable_order_id(cand, "detail_text")
+                    if ok:
+                        order_id = cand.strip().upper()
+                        logger.info("[Orden %s] ID extraído='%s' estrategia=detail_text_regex fuente='PEDIDO N.°'", idx, order_id)
+                        break
+                        
+                if not order_id:
+                    for m in re.finditer(r'(?i)order\s*id\s*[:#-]?\s*([A-Za-z0-9\-]{5,})', detail_text):
+                        cand = m.group(1)
+                        ok, reason = self._is_reliable_order_id(cand, "detail_text_en")
+                        if ok:
+                            order_id = cand.strip().upper()
+                            logger.info("[Orden %s] ID extraído='%s' estrategia=detail_text_regex fuente='Order ID'", idx, order_id)
+                            break
                 try:
                     page_source = self.driver.page_source
                     matches = re.findall(r'data-order-id=["\']([A-Za-z0-9\-]{3,})["\']', page_source)
@@ -1311,27 +1339,40 @@ class OrderScraper:
                 pass
             return None, ""
 
-    def _capture_order_detail_text(self) -> str:
-        """Captura texto bruto del panel de detalle del pedido para identidad fallback."""
+    def _capture_order_detail_text(self, silent: bool = False) -> str:
+        """Captura texto bruto del panel de detalle del pedido para extraer el ID y como fallback."""
         selectors = [
+            'div[aria-label="Detalles del pedido"]',
+            'div[aria-label="Order details"]',
             'div[data-testid="order-details"]',
+            'div[data-testid="right-drawer"]',
+            'div[data-testid="drawer-right"]',
             'div[role="dialog"]',
-            '#main',
         ]
+        
+        # Esperar un poco a que el panel derecho renderice
+        time.sleep(0.5)
+        
         for sel in selectors:
             try:
                 el = self.driver.find_element(By.CSS_SELECTOR, sel)
-                text = ' '.join((el.text or '').split())
-                if text:
-                    logger.info("[Orden][detail] fuente=%s preview='%s'", sel, text[:160])
-                    return text
+                if el.is_displayed():
+                    text = ' '.join((el.text or '').split())
+                    if text:
+                        if not silent:
+                            logger.info("[Orden][detail] fuente=%s preview='%s'", sel, text[:160])
+                        return text
             except Exception:
                 continue
+        
+        # Si no encontró los drawers específicos, intenta buscar cualquier contenedor de la derecha
         try:
+            # WhatsApp divide la pantalla tipicamente usando elementos flex, buscamos el contenedor más a la derecha
             body = self.driver.find_element(By.TAG_NAME, 'body')
             text = ' '.join((body.text or '').split())
             if text:
-                logger.info("[Orden][detail] fuente=body preview='%s'", text[:160])
+                if not silent:
+                    logger.info("[Orden][detail] fuente=body preview='%s'", text[:160])
                 return text
         except Exception:
             pass
@@ -1339,38 +1380,13 @@ class OrderScraper:
 
     def _go_back(self):
         """
-        Hace clic en el botón Volver del panel de detalle y espera
-        a que reaparezca la lista de órdenes.
+        Ya no cerramos el panel de detalle derecho.
+        Dejarlo abierto mejora drásticamente el rendimiento y la estabilidad porque
+        al hacer clic en la siguiente fila de la lista, el panel simplemente actualiza 
+        su contenido en lugar de tener que reproducir la animación de apertura, 
+        la cual era demasiado lenta y causaba fallos intermitentes en la captura.
         """
-        back_selectors = [
-            'button[aria-label="Back"]',
-            'button[aria-label="Volver"]',
-            'button[aria-label="Atrás"]',
-            'button[data-tab="2"]',
-        ]
-        for sel in back_selectors:
-            try:
-                btn = WebDriverWait(self.driver, 4).until(
-                    EC.element_to_be_clickable((By.CSS_SELECTOR, sel)))
-                btn.click()
-                break
-            except TimeoutException:
-                continue
-
-        # Intentar también con JS si los selectores fallan (botón de navegador)
-        try:
-            WebDriverWait(self.driver, 6).until(
-                EC.presence_of_element_located(
-                    (By.CSS_SELECTOR, 'button.x6s0dn4.x78zum5.xvt47uu')))
-        except TimeoutException:
-            # Si no aparece la lista, intentar con el botón atrás del navegador
-            try:
-                self.driver.execute_script("window.history.back()")
-                time.sleep(1)
-            except Exception as exc:
-                logger.warning("[NAVIGATION] No se pudo volver con history.back(): %s", exc)
-
-        time.sleep(0.6)
+        time.sleep(0.3)
 
     # ── Parseo de una fila de orden ───────────────────────────────────────────
     def _parse_order_row(self, btn, cur_date: date, idx: int) -> dict | None:
