@@ -525,6 +525,7 @@ class OrderScraper:
         # Segunda pasada: navegar a cada orden para obtener el ID real
         fallback_seen: dict[str, dict] = {}
         order_count = 0
+        last_extracted_id = None
         for i, (rtype, data) in enumerate(rows_data):
             if rtype != 'order':
                 continue
@@ -538,7 +539,8 @@ class OrderScraper:
             if btn is not None:
                 self._trace_step("order", f"abriendo pedido idx={order_count}")
                 self._debug_pause("open_order")
-                wa_id, detail_text = self._fetch_order_id(btn, order_count)
+                wa_id, detail_text = self._fetch_order_id(btn, order_count, last_extracted_id)
+                last_extracted_id = wa_id if wa_id else last_extracted_id
                 # Después de volver, re-localizar el container
                 try:
                     container = self.driver.find_element(
@@ -1187,7 +1189,7 @@ class OrderScraper:
             pass
         return None
 
-    def _fetch_order_id(self, btn, idx: int) -> tuple[str | None, str]:
+    def _fetch_order_id(self, btn, idx: int, last_extracted_id: str | None = None) -> tuple[str | None, str]:
         """
         Hace clic en el botón de la orden, lee el ID único del panel de detalle
         y vuelve a la lista. Devuelve el ID de WhatsApp o None si no se puede obtener.
@@ -1210,11 +1212,17 @@ class OrderScraper:
             # Polling: buscar hasta 6 veces (aprox 3 segundos) el panel con el ID
             for attempt in range(6):
                 detail_text = self._capture_order_detail_text(silent=(attempt > 0))
-                if re.search(r'(?i)(pedido\s*n|order\s*id)\.?[°º]?\s*([A-Za-z0-9\-]{5,})', detail_text):
-                    break
+                
+                match = re.search(r'(?i)(pedido\s*n|order\s*id)\.?[°º]?\s*([A-Za-z0-9\-]{5,})', detail_text)
+                if match:
+                    cand = match.group(2).strip().upper()
+                    # Rompemos el loop si encontramos un ID y es diferente al de la orden anterior,
+                    # garantizando que el DOM de WhatsApp ya se actualizó.
+                    if cand != last_extracted_id:
+                        break
                 
                 time.sleep(0.5)
-                # Si llegamos a la mitad de los intentos y no hay nada, reintentar el clic
+                # Si llegamos a la mitad de los intentos y no hay nada nuevo, reintentar el clic
                 if attempt == 2:
                     try:
                         btn.click()
