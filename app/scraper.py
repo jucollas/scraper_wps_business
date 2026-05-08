@@ -1211,7 +1211,8 @@ class OrderScraper:
             
             # Polling: buscar hasta 6 veces (aprox 3 segundos) el panel con el ID
             for attempt in range(6):
-                detail_text = self._capture_order_detail_text(silent=(attempt > 0))
+                # strict=True asegura que solo se lea el panel derecho, nunca el body global (evitando falsos positivos)
+                detail_text = self._capture_order_detail_text(silent=(attempt > 0), strict=True)
                 
                 match = re.search(r'(?i)(pedido\s*n|order\s*id)\.?[°º]?\s*([A-Za-z0-9\-]{5,})', detail_text)
                 if match:
@@ -1228,6 +1229,10 @@ class OrderScraper:
                         btn.click()
                     except Exception:
                         pass
+            
+            # Si después de intentar, detail_text está vacío, intentar un fallback global
+            if not detail_text:
+                detail_text = self._capture_order_detail_text(silent=True, strict=False)
 
             # Intentar múltiples estrategias centradas en contexto de detalle e ID real.
             search_strategies = [
@@ -1347,7 +1352,7 @@ class OrderScraper:
                 pass
             return None, ""
 
-    def _capture_order_detail_text(self, silent: bool = False) -> str:
+    def _capture_order_detail_text(self, silent: bool = False, strict: bool = True) -> str:
         """Captura texto bruto del panel de detalle del pedido para extraer el ID y como fallback."""
         selectors = [
             'div[aria-label="Detalles del pedido"]',
@@ -1373,6 +1378,9 @@ class OrderScraper:
             except Exception:
                 continue
         
+        if strict:
+            return ""
+
         # Si no encontró los drawers específicos, intenta buscar cualquier contenedor de la derecha
         try:
             # WhatsApp divide la pantalla tipicamente usando elementos flex, buscamos el contenedor más a la derecha
