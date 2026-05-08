@@ -628,7 +628,7 @@ class App(ctk.CTk):
         orders = self._get_analytics_orders()
         self._validate_orders_for_analytics(orders)
         year   = int(self._an_year_var.get())
-        total_rev = sum(o["monto"] for o in orders)
+        total_rev = sum(o["monto"] for o in orders if o.get("estado") == "Completado")
         logger.info("[ANALYTICS] Refresh year=%s count=%s revenue=%.2f", year, len(orders), total_rev)
         self._an_lbl_info.config(
             text=f"{len(orders)} ordenes  ·  ${total_rev:,.2f} total")
@@ -670,19 +670,21 @@ class App(ctk.CTk):
                 self._an_kpi_vars[k].set("Sin datos")
             logger.info("[ANALYTICS] KPIs sin datos para el filtro actual")
             return
-        total  = sum(o["monto"] for o in orders)
+        complt = sum(1 for o in orders if o.get("estado") == "Completado")
+        total  = sum(o["monto"] for o in orders if o.get("estado") == "Completado")
         count  = len(orders)
-        complt = sum(1 for o in orders if o["estado"] == "Completado")
-        self._an_kpi_vars["ticket_prom"].set(f"${total / count:,.2f}")
+        self._an_kpi_vars["ticket_prom"].set(f"${total / complt:,.2f}" if complt else "$0.00")
         rev_prod = defaultdict(float)
         for o in orders:
-            rev_prod[o["producto"]] += o["monto"]
+            if o.get("estado") == "Completado":
+                rev_prod[o["producto"]] += o["monto"]
         if rev_prod:
             bp = max(rev_prod, key=rev_prod.__getitem__)
             self._an_kpi_vars["prod_estrella"].set(bp[:22] + "..." if len(bp) > 22 else bp)
         rev_cli = defaultdict(float)
         for o in orders:
-            rev_cli[o["cliente"]] += o["monto"]
+            if o.get("estado") == "Completado":
+                rev_cli[o["cliente"]] += o["monto"]
         if rev_cli:
             bc = max(rev_cli, key=rev_cli.__getitem__)
             self._an_kpi_vars["mejor_cliente"].set(bc[:22] + "..." if len(bc) > 22 else bc)
@@ -697,7 +699,7 @@ class App(ctk.CTk):
         monthly     = defaultdict(float)
         monthly_cnt = defaultdict(int)
         for o in orders:
-            if o["fecha"].startswith(f"{year:04d}"):
+            if o["fecha"].startswith(f"{year:04d}") and o.get("estado") == "Completado":
                 m = int(o["fecha"][5:7])
                 monthly[m]     += o["monto"]
                 monthly_cnt[m] += 1
@@ -791,7 +793,8 @@ class App(ctk.CTk):
         self._clear_frame(self._chart_products)
         rev_prod = defaultdict(float)
         for o in orders:
-            rev_prod[o["producto"]] += o["monto"]
+            if o.get("estado") == "Completado":
+                rev_prod[o["producto"]] += o["monto"]
         top5 = sorted(rev_prod.items(), key=lambda x: x[1], reverse=True)[:5]
 
         hdr = tk.Frame(self._chart_products, bg=CARD_BG)
@@ -1493,7 +1496,7 @@ class App(ctk.CTk):
                              tags=tags)
 
     def _refresh_kpis(self, orders: list):
-        total = sum(o["monto"] for o in orders)
+        total = sum(o["monto"] for o in orders if o.get("estado") == "Completado")
         self.kpi_vars["total"].set(f"${total:,.2f}")
         self.kpi_vars["count"].set(str(len(orders)))
         self.kpi_vars["completado"].set(
