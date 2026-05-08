@@ -88,6 +88,7 @@ class App(ctk.CTk):
         self.orders        = []
         self.driver        = None
         self.connected     = False
+        self.is_auto_sync  = False
         self._sort_col     = None
         self._sort_rev     = False
         self._current_page = "panel"
@@ -215,12 +216,20 @@ class App(ctk.CTk):
         self.btn_connect.pack(fill="x", pady=(0, 6))
 
         self.btn_sync = ctk.CTkButton(
-            conn, text="🔄  Sincronizar pedidos",
+            conn, text="🔄  Sincronización Manual",
             fg_color=PRIMARY, hover_color=PRIMARY_HOVER, text_color="white",
             font=ctk.CTkFont(family=EF, size=12), height=38, corner_radius=8,
             command=self._sync)
         self.btn_sync.pack(fill="x", pady=(0, 4))
         self.btn_sync.pack_forget()
+
+        self.btn_sync_auto = ctk.CTkButton(
+            conn, text="🤖  Sincronización Automática",
+            fg_color="#8B5CF6", hover_color="#7C3AED", text_color="white",
+            font=ctk.CTkFont(family=EF, size=12), height=38, corner_radius=8,
+            command=self._toggle_auto_sync)
+        self.btn_sync_auto.pack(fill="x", pady=(0, 4))
+        self.btn_sync_auto.pack_forget()
 
         self.btn_disconnect = ctk.CTkButton(
             conn, text="Desconectar",
@@ -1179,7 +1188,30 @@ class App(ctk.CTk):
 
     def _sync(self):
         self.btn_sync.configure(state="disabled", text="Sincronizando...")
+        self.btn_sync_auto.configure(state="disabled")
         threading.Thread(target=self._do_sync, daemon=True).start()
+
+    def _toggle_auto_sync(self):
+        self.is_auto_sync = not self.is_auto_sync
+        if self.is_auto_sync:
+            self.btn_sync_auto.configure(text="⏹️  Detener Sincronización Automática", fg_color=DANGER, hover_color="#DC2626")
+            self.btn_sync.configure(state="disabled")
+            threading.Thread(target=self._auto_sync_loop, daemon=True).start()
+        else:
+            self.btn_sync_auto.configure(text="🤖  Sincronización Automática", fg_color="#8B5CF6", hover_color="#7C3AED", state="disabled")
+            self.btn_sync.configure(state="disabled")
+            
+    def _auto_sync_loop(self):
+        while self.is_auto_sync and self.connected and self.driver:
+            self._do_sync()
+            if self.is_auto_sync:
+                self._set_status_text("⏳ Esperando para siguiente ciclo automático...")
+                time.sleep(5) # Pequeña pausa entre ciclos para no saturar CPU/Navegador
+
+        # Cuando el ciclo termina o se desactiva
+        self.after(0, lambda: self.btn_sync_auto.configure(state="normal", text="🤖  Sincronización Automática", fg_color="#8B5CF6", hover_color="#7C3AED"))
+        self.after(0, lambda: self.btn_sync.configure(state="normal", text="🔄  Sincronización Manual"))
+        self.after(0, lambda: self._set_status_text("Automático detenido. Sincronización manual disponible."))
 
     def _do_sync(self):
         """Realiza sincronización manual de órdenes."""
@@ -1259,8 +1291,10 @@ class App(ctk.CTk):
             import logging
             logging.exception("Error en _do_sync:")
         finally:
-            self.after(0, lambda: self.btn_sync.configure(
-                state="normal", text="🔄  Sincronizar pedidos"))
+            if not self.is_auto_sync:
+                self.after(0, lambda: self.btn_sync.configure(
+                    state="normal", text="🔄  Sincronización Manual"))
+                self.after(0, lambda: self.btn_sync_auto.configure(state="normal"))
 
     def _open_whatsapp(self):
         try:
@@ -1308,32 +1342,10 @@ class App(ctk.CTk):
             self.after(0, self._hide_qr_overlay)
             self.after(0, self._on_session_linked)
             self.after(0, lambda: self._set_status_text(
-                "Sesión vinculada. Sincronizando..."))
+                "Sesión vinculada. Iniciando sincronización automática..."))
 
-            try:
-                scraper = OrderScraper(
-                    self.driver,
-                    on_status=lambda msg: self.after(
-                        0, lambda m=msg: self._set_status_text(m)))
-                new_orders = scraper.fetch()
-                if not new_orders:
-                    diag = getattr(scraper, "last_run_diagnostics", {}) or {}
-                    import logging
-                    logging.warning("[SYNC-INIT] Sin órdenes en primer sync. diagnostics=%s", diag)
-                new_c, upd_c = self._db.merge(new_orders)
-                all_orders   = self._db.get_all()
-                self.after(0, lambda: self._load_orders(all_orders))
-                self.after(0, lambda: self._on_connected(new_c, upd_c))
-            except Exception as sync_error:
-                self.after(0, lambda: self.btn_sync.configure(
-                    state="normal", text="🔄  Sincronizar pedidos"))
-                self.after(0, lambda: self._set_status_text(
-                    "✅ WhatsApp vinculado. Sync inicial falló - intenta manualmente."))
-                self.after(0, lambda: messagebox.showerror(
-                    "Error en sincronización inicial",
-                    f"WhatsApp está conectado pero falló el primer sync.\n\n{str(sync_error)}\n\nPuedes intentar la sincronización manual después."))
-                import logging
-                logging.exception("Error en sincronización inicial:")
+            self.after(0, lambda: self._on_connected(0, 0))
+            self.after(0, self._toggle_auto_sync)
         except Exception as e:
             self.after(0, self._hide_qr_overlay)
             self._dispose_driver()
@@ -1346,7 +1358,9 @@ class App(ctk.CTk):
         self._set_status_text("WhatsApp vinculado. Cargando pedidos...")
         self.btn_connect.pack_forget()
         self.btn_sync.configure(state="disabled", text="Sincronizando...")
+        self.btn_sync_auto.configure(state="disabled")
         self.btn_sync.pack(fill="x", pady=(0, 6))
+        self.btn_sync_auto.pack(fill="x", pady=(0, 6))
         self.btn_disconnect.pack(fill="x")
         self._apply_filter()
 
@@ -1363,7 +1377,9 @@ class App(ctk.CTk):
         
         self._set_connection_state("connected")
         self._set_status_text(msg)
-        self.btn_sync.configure(state="normal", text="🔄  Sincronizar pedidos")
+        if not self.is_auto_sync:
+            self.btn_sync.configure(state="normal", text="🔄  Sincronización Manual")
+            self.btn_sync_auto.configure(state="normal")
         self._apply_filter()
 
     def _disconnect(self):
@@ -1371,8 +1387,10 @@ class App(ctk.CTk):
         self.connected = False
         self._set_connection_state("disconnected")
         self._set_status_text("Sin sincronizar")
+        self.is_auto_sync = False
         self.btn_disconnect.pack_forget()
         self.btn_sync.pack_forget()
+        self.btn_sync_auto.pack_forget()
         self.btn_connect.pack(fill="x", pady=(0, 6))
         self._reset_connect_btn()
 
