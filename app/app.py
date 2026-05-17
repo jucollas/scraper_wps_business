@@ -7,7 +7,7 @@ import sys
 import logging
 import tkinter as tk
 from tkinter import ttk, messagebox
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from collections import defaultdict
 import threading
 import time
@@ -1783,19 +1783,112 @@ class App(ctk.CTk):
     def _build_reports_page(self, container):
         self._reports_page = tk.Frame(container, bg=CONTENT_BG)
         self._reports_page.grid_columnconfigure(0, weight=1)
-        self._reports_page.grid_rowconfigure(1, weight=1)
+        self._reports_page.grid_rowconfigure(2, weight=1)
+
+        # Acciones Rápidas (Tarjetas Individuales)
+        quick_wrap = tk.Frame(self._reports_page, bg=CONTENT_BG)
+        quick_wrap.grid(row=0, column=0, sticky="ew", padx=24, pady=(20, 0))
+
+        tk.Label(quick_wrap, text="Generación Rápida", bg=CONTENT_BG, fg=TEXT_TITLE,
+                 font=("Segoe UI", 16, "bold")).pack(anchor="w", pady=(0, 10))
+
+        cards_frame = tk.Frame(quick_wrap, bg=CONTENT_BG)
+        cards_frame.pack(fill="x")
+
+        reports = [
+            ("Último Mes", "ultimo_mes", "📅", "Mes calendario anterior"),
+            ("Último Trimestre", "ultimo_trimestre", "📊", "Último trimestre cerrado"),
+            ("Lo que va de Año", "ytd", "📈", "Acumulado desde enero"),
+            ("Toda la Operación", "toda_operacion", "🌍", "Histórico completo")
+        ]
+        
+        for i, (title, mode, icon, desc) in enumerate(reports):
+            card = tk.Frame(cards_frame, bg=CARD_BG, highlightthickness=1, highlightbackground=BORDER)
+            card.pack(side="left", expand=True, fill="both", padx=(0, 14) if i < len(reports)-1 else 0)
+            
+            inner = tk.Frame(card, bg=CARD_BG)
+            inner.pack(padx=16, pady=16, fill="both", expand=True)
+            
+            top_row = tk.Frame(inner, bg=CARD_BG)
+            top_row.pack(fill="x")
+            
+            tk.Label(top_row, text=icon, bg=CARD_BG, font=("Segoe UI", 18)).pack(side="left", padx=(0, 8))
+            tk.Label(top_row, text=title, bg=CARD_BG, fg=TEXT_TITLE, font=("Segoe UI", 11, "bold")).pack(side="left")
+            
+            tk.Label(inner, text=desc, bg=CARD_BG, fg=TEXT_SECONDARY, font=("Segoe UI", 9)).pack(anchor="w", pady=(4, 12))
+            
+            btn_row = tk.Frame(inner, bg=CARD_BG)
+            btn_row.pack(fill="x", side="bottom")
+            
+            ctk.CTkButton(btn_row, text="📄 PDF", width=60, height=30, 
+                          fg_color=PRIMARY, hover_color=PRIMARY_HOVER, 
+                          font=ctk.CTkFont(size=11, weight="bold"), corner_radius=6,
+                          command=lambda m=mode: self._generate_quick_report(m, "pdf")).pack(side="left", expand=True, fill="x", padx=(0, 4))
+            ctk.CTkButton(btn_row, text="📊 Excel", width=60, height=30, 
+                          fg_color="#10B981", hover_color="#059669", 
+                          font=ctk.CTkFont(size=11, weight="bold"), corner_radius=6,
+                          command=lambda m=mode: self._generate_quick_report(m, "excel")).pack(side="left", expand=True, fill="x", padx=(4, 0))
 
         hdr = tk.Frame(self._reports_page, bg=CONTENT_BG)
-        hdr.grid(row=0, column=0, sticky="ew", padx=24, pady=(20, 8))
+        hdr.grid(row=1, column=0, sticky="ew", padx=24, pady=(20, 8))
         tk.Label(hdr, text="Reportes generados",
                  bg=CONTENT_BG, fg=TEXT_TITLE,
                  font=("Segoe UI", 18, "bold")).pack(side="left")
 
         self._reports_scroll = ctk.CTkScrollableFrame(
             self._reports_page, fg_color=CONTENT_BG, corner_radius=0)
-        self._reports_scroll.grid(row=1, column=0, sticky="nsew",
+        self._reports_scroll.grid(row=2, column=0, sticky="nsew",
                                    padx=24, pady=(0, 20))
         self._reports_scroll.grid_columnconfigure(0, weight=1)
+
+    def _generate_quick_report(self, mode: str, fmt: str):
+        now = date.today()
+        d_to = now
+        d_from = now
+        
+        if mode == "ultimo_mes":
+            first_day_this = now.replace(day=1)
+            d_to = first_day_this - timedelta(days=1)
+            d_from = d_to.replace(day=1)
+        elif mode == "ultimo_trimestre":
+            q = (now.month - 1) // 3 + 1
+            if q == 1:
+                d_from = date(now.year - 1, 10, 1)
+                d_to = date(now.year - 1, 12, 31)
+            else:
+                m_start = (q - 2) * 3 + 1
+                d_from = date(now.year, m_start, 1)
+                import calendar
+                _, last_day = calendar.monthrange(now.year, m_start + 2)
+                d_to = date(now.year, m_start + 2, last_day)
+        elif mode == "ytd":
+            d_from = date(now.year, 1, 1)
+            d_to = now
+        elif mode == "toda_operacion":
+            if self.orders:
+                min_f = min(o.get("fecha", "9999-12-31") for o in self.orders)
+                try:
+                    d_from = date.fromisoformat(min_f)
+                except Exception:
+                    d_from = now
+            else:
+                d_from = now
+            d_to = now
+            
+        s_from = d_from.isoformat()
+        s_to = d_to.isoformat()
+        
+        export_orders = [o for o in self.orders if s_from <= o["fecha"] <= s_to]
+        
+        if fmt == "pdf":
+            ok, msg = self._exporter.to_pdf(export_orders, s_from, s_to)
+        else:
+            ok, msg = self._exporter.to_excel(export_orders, s_from, s_to)
+            
+        if ok:
+            self._refresh_reports()
+        else:
+            messagebox.showerror("Error", msg)
 
     def _refresh_reports(self):
         if hasattr(self, "_reports_inner") and self._reports_inner.winfo_exists():
