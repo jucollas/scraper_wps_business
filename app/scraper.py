@@ -45,6 +45,13 @@ ESTADO_MAP = {
     'entregado':         'Completado',
     'cancelled':         'Cancelado',
     'cancelado':         'Cancelado',
+    'enviado':           'Enviado',
+    'shipped':           'Enviado',
+    'sent':              'Enviado',
+    'envío en preparación':        'Envío en preparación',
+    'envio en preparacion':        'Envío en preparación',
+    'preparing shipment':          'Envío en preparación',
+    'shipment in preparation':     'Envío en preparación',
 }
 
 # Nombres de meses en español e inglés para parseo de fechas
