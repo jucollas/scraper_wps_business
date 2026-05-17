@@ -556,7 +556,7 @@ class OrderScraper:
                 self._trace_step("order", f"abriendo pedido idx={order_count}")
                 self._debug_pause("open_order")
                 wa_id, detail_text = self._fetch_order_id(btn, order_count, last_extracted_id)
-                last_extracted_id = wa_id if wa_id else last_extracted_id
+                last_extracted_id = wa_id if (wa_id and wa_id != '__ORDER_REQUEST__') else last_extracted_id
                 # Después de volver, re-localizar el container
                 try:
                     container = self.driver.find_element(
@@ -567,7 +567,15 @@ class OrderScraper:
             
             # Si se obtuvo el ID de WhatsApp, usarlo como ID principal
             # Si no, se descarta el pedido a petición del usuario.
-            if wa_id:
+            if wa_id == '__ORDER_REQUEST__':
+                # Es una solicitud de pedido (no confirmado), descartar silenciosamente
+                logger.info(
+                    "[Sync] Orden %s descartada: Solicitud de pedido (no confirmado) cliente='%s'",
+                    order_count,
+                    order.get('cliente'),
+                )
+                self._trace_step("order", f"solicitud de pedido idx={order_count} -> descartado")
+            elif wa_id:
                 order['whatsapp_order_id'] = wa_id
                 order['id'] = wa_id
                 logger.info(f"[Sync] Orden {order_count}: whatsapp_order_id='{wa_id}' cliente='{order.get('cliente')}' monto={order.get('monto')}")
@@ -1212,7 +1220,19 @@ class OrderScraper:
                 # strict=True asegura que solo se lea el panel derecho, nunca el body global (evitando falsos positivos)
                 detail_text = self._capture_order_detail_text(silent=(attempt > 0), strict=True)
                 
-                # Expresión regular ampliada para detectar identificador en "Solicitud de pedido" u otras variantes
+                # ── Filtro temprano: descartar "Solicitud de pedido" ──
+                # Las solicitudes de pedido tienen un formato distinto a los pedidos
+                # confirmados ("Pedido N.°"). No contienen un ID de WhatsApp válido
+                # y deben descartarse sin perder tiempo en estrategias de extracción.
+                if detail_text and self._is_order_request(detail_text):
+                    logger.info(
+                        "[Orden %s] Descartada: es una 'Solicitud de pedido' (no un pedido confirmado). preview='%s'",
+                        idx, detail_text[:160],
+                    )
+                    self._go_back()
+                    return '__ORDER_REQUEST__', detail_text
+                
+                # Expresión regular ampliada para detectar identificador
                 match = re.search(r'(?i)(pedido\s*n|order\s*id|solicitud\s*n|id|pedido)\.?[°º]?\s*[:#-]?\s*([A-Za-z0-9\-]{8,15})', detail_text)
                 cand = None
                 
@@ -1372,6 +1392,47 @@ class OrderScraper:
             except Exception:
                 pass
             return None, ""
+
+    @staticmethod
+    def _is_order_request(detail_text: str) -> bool:
+        """
+        Detecta si el texto del panel de detalle corresponde a una
+        'Solicitud de pedido' (order request) en lugar de un pedido confirmado.
+        
+        Las solicitudes de pedido:
+        - Contienen 'Solicitud de pedido' / 'Order request'
+        - Tienen 'Aceptar pedido' / 'Accept order' (botón de acción)
+        - Muestran 'total estimado' / 'estimated total'
+        - NO contienen 'PEDIDO N.°' ni un ID de orden real
+        
+        Returns True si es una solicitud (debe descartarse).
+        """
+        txt = (detail_text or '').lower()
+        
+        # Indicadores positivos de solicitud de pedido
+        request_markers = [
+            'solicitud de pedido',
+            'order request',
+            'aceptar pedido',
+            'accept order',
+            'total estimado',
+            'estimated total',
+        ]
+        
+        # Indicadores de pedido confirmado (si aparecen, NO es solicitud)
+        confirmed_markers = [
+            'pedido n',     # "PEDIDO N.°" 
+            'order n',      # "ORDER N.°"
+            'pedido #',
+            'order #',
+            'order id',
+            'id de pedido',
+        ]
+        
+        has_request = any(marker in txt for marker in request_markers)
+        has_confirmed = any(marker in txt for marker in confirmed_markers)
+        
+        return has_request and not has_confirmed
 
     def _capture_order_detail_text(self, silent: bool = False, strict: bool = True) -> str:
         """Captura texto bruto del panel de detalle del pedido para extraer el ID y como fallback."""
