@@ -41,6 +41,10 @@ _WHITE  = "FFFFFF"
 _COMP   = "D1FAE5"
 _PEND   = "FEF3C7"
 _CANC   = "FEE2E2"
+_ENV    = "EFF6FF"
+_PREP   = "F5F3FF"
+
+_PAID_STATES = {"Completado", "Enviado", "Envío en preparación", "Entregado"}
 
 
 class Exporter:
@@ -55,6 +59,9 @@ class Exporter:
         "Completado": _COMP,
         "Pendiente":  _PEND,
         "Cancelado":  _CANC,
+        "Enviado":    _ENV,
+        "Envío en preparación": _PREP,
+        "Entregado":  _COMP,
     }
 
     @staticmethod
@@ -148,7 +155,7 @@ class Exporter:
         last = len(orders) + 2
         ws.cell(row=last, column=4, value="TOTAL").font = Font(bold=True, size=10)
         tc = ws.cell(row=last, column=5,
-                     value=sum(o["monto"] for o in orders))
+                     value=sum(o["monto"] for o in orders if o.get("estado") in _PAID_STATES))
         tc.font          = Font(bold=True, size=10, color=_GREEN)
         tc.number_format = '#,##0.00'
         tc.alignment     = Alignment(horizontal="center")
@@ -184,21 +191,22 @@ class Exporter:
                 logger.warning(f"No se pudo cargar el logo en Excel: {e}")
 
         # KPIs
-        total  = sum(o["monto"] for o in orders)
+        total  = sum(o["monto"] for o in orders if o.get("estado") in _PAID_STATES)
         count  = len(orders)
         by_est = Counter(o["estado"] for o in orders)
+        pagadas = sum(by_est.get(st, 0) for st in _PAID_STATES)
 
-        kpis = [
+        kpi_items = [
             ("Métrica", "Valor"),
             ("Total órdenes", count),
             ("Total facturado", total),
-            ("Completadas", by_est.get("Completado", 0)),
+            ("Pagadas", pagadas),
             ("Pendientes",  by_est.get("Pendiente",  0)),
             ("Canceladas",  by_est.get("Cancelado",  0)),
             ("Promedio/orden", total / count if count else 0),
         ]
 
-        for i, (label, val) in enumerate(kpis, 5):
+        for i, (label, val) in enumerate(kpi_items, 5):
             a = ws.cell(row=i, column=1, value=label)
             b = ws.cell(row=i, column=2, value=val)
             if i == 5:
@@ -294,12 +302,13 @@ class Exporter:
                                  spaceAfter=10))
 
         # KPIs en fila
-        total   = sum(o["monto"] for o in orders)
+        total   = sum(o["monto"] for o in orders if o.get("estado") in _PAID_STATES)
         by_est  = Counter(o["estado"] for o in orders)
+        pagadas = sum(by_est.get(st, 0) for st in _PAID_STATES)
         kpi_data = [[
             f"Total: ${total:,.2f}",
             f"Órdenes: {len(orders)}",
-            f"Completadas: {by_est.get('Completado', 0)}",
+            f"Pagadas: {pagadas}",
             f"Pendientes: {by_est.get('Pendiente', 0)}",
         ]]
         kpi_tbl = Table(kpi_data, colWidths=[4*cm, 3.5*cm, 4*cm, 3.5*cm])
