@@ -15,3 +15,8 @@ app/orders.db
 run.bat
 wsp_session_*/
 app/wsp_session_*/
+populate_test_data.py
+app/reportes/*.pdf
+app/reportes/*.xlsx
+
+populate_test_data.py/
