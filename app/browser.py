@@ -197,49 +197,30 @@ class BrowserManager:
             if browser_path:
                 installed[name] = browser_path
 
-        logger.info(f"Navegador predeterminado detectado: {default}")
         logger.info(f"Drivers disponibles: { {k: v for k, v in sdk_ok.items() if v} }")
         logger.info(f"Navegadores instalados: {installed}")
 
-        # Siempre poner el navegador predeterminado primero
-        order = []
-        if default and default in installed:
-            order.append(default)
+        # Siempre forzar el uso exclusivo de Edge
+        order = ["edge"]
 
-        if sys.platform == "win32":
-            fallback_order = ["edge", "chrome", "firefox"]
-        else:
-            fallback_order = ["chrome", "edge", "firefox"]
-
-        for name in fallback_order:
-            if name not in order and name in installed:
-                order.append(name)
-
-        if not order:
+        if "edge" not in installed:
             raise RuntimeError(
-                "No se encontró ningún navegador compatible instalado.\n"
-                "Instala Chrome, Edge o Firefox y vuelve a intentarlo.\n\n"
+                "Microsoft Edge no se encuentra instalado en el sistema.\n"
+                "Por favor, instala Edge para continuar.\n\n"
                 "Si faltan paquetes de Python, instala:\n"
                 "  pip install selenium webdriver-manager")
 
         errors = []
         for name in order:
-            # 1er intento: con el perfil guardado (conserva la sesión de WhatsApp)
+            # Único intento: con el perfil guardado (conserva la sesión de WhatsApp)
+            # NUNCA borrar el perfil si falla.
             driver, label, error = self._try_build(name, headless)
             if driver:
                 logger.info(f"Navegador iniciado: {label}")
                 return driver, label
             if error:
                 errors.append(f"{error} (perfil guardado)")
-                logger.warning(f"Primer intento fallido para {name}: {error}. Reintentando con perfil nuevo…")
-
-            # 2do intento: elimina el perfil corrompido y empieza limpio
-            driver, label, error2 = self._try_build(name, headless, fresh=True)
-            if driver:
-                logger.warning(f"Navegador iniciado con perfil nuevo (sesión perdida): {label}")
-                return driver, label
-            if error2:
-                errors.append(f"{error2} (perfil nuevo)")
+                logger.error(f"Fallo al iniciar {name}: {error}")
 
         raise RuntimeError(
             "No se pudo iniciar ningún navegador.\n\n"

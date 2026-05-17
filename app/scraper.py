@@ -23,6 +23,8 @@ from config import (
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.common.action_chains import ActionChains
+from selenium.webdriver.common.keys import Keys
 from selenium.common.exceptions import (
     TimeoutException,
     NoSuchElementException,
@@ -43,6 +45,13 @@ ESTADO_MAP = {
     'entregado':         'Completado',
     'cancelled':         'Cancelado',
     'cancelado':         'Cancelado',
+    'enviado':           'Enviado',
+    'shipped':           'Enviado',
+    'sent':              'Enviado',
+    'envío en preparación':        'Envío en preparación',
+    'envio en preparacion':        'Envío en preparación',
+    'preparing shipment':          'Envío en preparación',
+    'shipment in preparation':     'Envío en preparación',
 }
 
 # Nombres de meses en español e inglés para parseo de fechas
@@ -89,6 +98,10 @@ class OrderScraper:
         self.last_run_diagnostics = {"status": "started"}
         self._trace_step("fetch", "inicio extracción")
         self._debug_pause("fetch:start")
+        
+        # Verificar y esperar si hay una sincronización profunda en curso (Ajustes)
+        self._check_and_wait_for_full_sync()
+        
         if self._is_orders_view_open():
             logger.info("[NAVIGATION] Vista Pedidos abierta")
             self._trace_step("navigation", "pedidos ya estaba abierto")
@@ -112,6 +125,72 @@ class OrderScraper:
         self._debug_pause("orders_opened")
         return self._read_order_list()
 
+    def _check_and_wait_for_full_sync(self):
+        """
+        Abre la configuración, verifica si hay una sincronización de mensajes en curso,
+        y espera a que termine antes de continuar.
+        """
+        self._status("🔍 Verificando estado de sincronización profunda...")
+        try:
+            from selenium.webdriver.common.keys import Keys
+            from selenium.webdriver.common.action_chains import ActionChains
+            
+            # Enviar Ctrl+Alt+, para abrir Ajustes
+            ActionChains(self.driver).key_down(Keys.CONTROL).key_down(Keys.ALT).send_keys(',').key_up(Keys.ALT).key_up(Keys.CONTROL).perform()
+            time.sleep(2.0)
+            
+            # Buscar el texto "sincronizando" o un progress bar
+            sync_xpath = '//*[contains(translate(text(), "ABCDEFGHIJKLMNOPQRSTUVWXYZÁÉÍÓÚÜ", "abcdefghijklmnopqrstuvwxyzáéíóúü"), "sincronizando") or contains(translate(text(), "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"), "syncing")]'
+            
+            start_time = time.time()
+            is_syncing = False
+            
+            # Revisar si aparece el texto en el panel
+            try:
+                els = self.driver.find_elements(By.XPATH, sync_xpath)
+                for el in els:
+                    if el.is_displayed():
+                        is_syncing = True
+                        break
+            except Exception:
+                pass
+                
+            if is_syncing:
+                logger.info("[SYNC] Sincronización detectada en Ajustes. Esperando a que termine...")
+                # Esperar indeterminadamente (hasta 2 horas)
+                while time.time() - start_time < 7200:
+                    still_syncing = False
+                    try:
+                        els = self.driver.find_elements(By.XPATH, sync_xpath)
+                        for el in els:
+                            if el.is_displayed():
+                                still_syncing = True
+                                text = el.text
+                                import re
+                                match = re.search(r'(\d+)\s*%', text)
+                                if match:
+                                    self._status(f"⏳ Sincronizando historial completo... {match.group(1)}%")
+                                else:
+                                    self._status("⏳ Sincronizando historial completo...")
+                                break
+                    except Exception:
+                        pass
+                        
+                    if still_syncing:
+                        time.sleep(5)
+                    else:
+                        logger.info("[SYNC] Sincronización en Ajustes finalizada.")
+                        break
+            else:
+                logger.info("[SYNC] No se detectó sincronización profunda en curso.")
+                
+            # Cerrar Ajustes (ESC)
+            ActionChains(self.driver).send_keys(Keys.ESCAPE).perform()
+            time.sleep(1)
+            
+        except Exception as e:
+            logger.warning(f"[SYNC] Error verificando sincronización en Ajustes: {e}")
+
     # ── Paso 1: abrir Business Tools ─────────────────────────────────────────
     def _open_business_tools(self) -> bool:
         if self._is_orders_view_open():
@@ -122,32 +201,32 @@ class OrderScraper:
         logger.info("[NAVIGATION][tools] Buscando Herramientas")
 
         candidates = [
-            # 1) texto visible exacto (español)
-            (By.XPATH, '//*[normalize-space(text())="Herramientas"]', 'exact:Herramientas'),
-            (By.XPATH, '//*[normalize-space(text())="Herramientas de empresa"]', 'exact:Herramientas de empresa'),
-            # 2) texto visible contains
-            (By.XPATH, '//*[contains(translate(normalize-space(text()), "ABCDEFGHIJKLMNOPQRSTUVWXYZÁÉÍÓÚÜ", "abcdefghijklmnopqrstuvwxyzáéíóúü"), "herramient")]', 'contains:herramient'),
-            # 3) aria-label
+            # 1) aria-label (Más preciso)
             (By.CSS_SELECTOR, '[aria-label="Herramientas"]', 'aria:Herramientas'),
             (By.CSS_SELECTOR, '[aria-label="Herramientas de empresa"]', 'aria:Herramientas de empresa'),
             (By.CSS_SELECTOR, '[aria-label*="Herramient"]', 'aria:*Herramient*'),
-            # 4) title
+            # 2) title
             (By.CSS_SELECTOR, '[title="Herramientas"]', 'title:Herramientas'),
             (By.CSS_SELECTOR, '[title="Herramientas de empresa"]', 'title:Herramientas de empresa'),
             (By.CSS_SELECTOR, '[title*="Herramient"]', 'title:*Herramient*'),
+            # 3) texto visible exacto (español)
+            (By.XPATH, '//*[normalize-space(text())="Herramientas"]', 'exact:Herramientas'),
+            (By.XPATH, '//*[normalize-space(text())="Herramientas de empresa"]', 'exact:Herramientas de empresa'),
+            # 4) texto visible contains
+            (By.XPATH, '//*[contains(translate(normalize-space(text()), "ABCDEFGHIJKLMNOPQRSTUVWXYZÁÉÍÓÚÜ", "abcdefghijklmnopqrstuvwxyzáéíóúü"), "herramient")]', 'contains:herramient'),
             # Fallback inglés
-            (By.XPATH, '//*[normalize-space(text())="Business tools"]', 'exact:Business tools'),
-            (By.XPATH, '//*[contains(translate(normalize-space(text()), "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"), "business tool")]', 'contains:business tool'),
             (By.CSS_SELECTOR, '[aria-label="Business tools"]', 'aria:Business tools'),
             (By.CSS_SELECTOR, '[aria-label*="business"]', 'aria:*business*'),
             (By.CSS_SELECTOR, '[title="Business tools"]', 'title:Business tools'),
             (By.CSS_SELECTOR, '[title*="business"]', 'title:*business*'),
+            (By.XPATH, '//*[normalize-space(text())="Business tools"]', 'exact:Business tools'),
+            (By.XPATH, '//*[contains(translate(normalize-space(text()), "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"), "business tool")]', 'contains:business tool'),
         ]
 
         clicked = self._try_click_candidates(candidates, step='tools', retries=2, wait_seconds=2)
         if clicked:
             logger.info("[NAVIGATION] Encontrado: Herramientas")
-            time.sleep(0.25)
+            time.sleep(1.5)
             return True
 
         logger.error("[NAVIGATION][tools] No se encontró ninguna variante válida de Herramientas/Herramientas de empresa tras reintentos.")
@@ -164,32 +243,35 @@ class OrderScraper:
         logger.info("[NAVIGATION] Entrando a Pedidos")
 
         candidates = [
-            # 1) texto visible exacto (español)
-            (By.XPATH, '//*[normalize-space(text())="Pedidos"]', 'exact:Pedidos'),
-            # 2) texto visible contains
-            (By.XPATH, '//*[contains(translate(normalize-space(text()), "ABCDEFGHIJKLMNOPQRSTUVWXYZÁÉÍÓÚÜ", "abcdefghijklmnopqrstuvwxyzáéíóúü"), "pedido")]', 'contains:pedido'),
-            # 3) aria-label
+            # 1) aria-label (Más seguro)
             (By.CSS_SELECTOR, '[aria-label="Pedidos"]', 'aria:Pedidos'),
             (By.CSS_SELECTOR, '[aria-label*="Pedido"]', 'aria:*Pedido*'),
-            # 4) title
+            # 2) title
             (By.CSS_SELECTOR, '[title="Pedidos"]', 'title:Pedidos'),
             (By.CSS_SELECTOR, '[title*="Pedido"]', 'title:*Pedido*'),
+            # 3) texto visible exacto (español)
+            (By.XPATH, '//*[normalize-space(text())="Pedidos"]', 'exact:Pedidos'),
+            # 4) texto visible contains
+            (By.XPATH, '//*[contains(translate(normalize-space(text()), "ABCDEFGHIJKLMNOPQRSTUVWXYZÁÉÍÓÚÜ", "abcdefghijklmnopqrstuvwxyzáéíóúü"), "pedido")]', 'contains:pedido'),
             # Fallback inglés
-            (By.XPATH, '//*[normalize-space(text())="Orders"]', 'exact:Orders'),
-            (By.XPATH, '//*[contains(translate(normalize-space(text()), "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"), "order")]', 'contains:order'),
             (By.CSS_SELECTOR, '[aria-label="Orders"]', 'aria:Orders'),
             (By.CSS_SELECTOR, '[aria-label*="Order"]', 'aria:*Order*'),
             (By.CSS_SELECTOR, '[title="Orders"]', 'title:Orders'),
             (By.CSS_SELECTOR, '[title*="Order"]', 'title:*Order*'),
+            (By.XPATH, '//*[normalize-space(text())="Orders"]', 'exact:Orders'),
+            (By.XPATH, '//*[contains(translate(normalize-space(text()), "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"), "order")]', 'contains:order'),
         ]
 
         clicked = self._try_click_candidates(candidates, step='orders', retries=2, wait_seconds=2)
         if clicked:
-            time.sleep(0.35)
+            time.sleep(1.0)
+            self._wait_spinners(timeout_seconds=60)
             if self._is_orders_view_open():
                 logger.info("[NAVIGATION] Vista Pedidos abierta")
                 return True
-            logger.warning("[NAVIGATION][orders] Se hizo click, pero la vista de pedidos no se confirmó aún.")
+            
+            logger.warning("[NAVIGATION][orders] Se hizo click, pero la vista de pedidos no se confirmó al 100%. Continuamos.")
+            return True
 
         logger.error("[NAVIGATION][orders] No se encontró la sección Pedidos/Orders tras todos los intentos.")
         self._status("⚠️  No se encontró la sección de Pedidos. Recuerda que necesitas tener WhatsApp Business para tener activados los pedidos.")
@@ -242,6 +324,13 @@ class OrderScraper:
 
                 logger.info("[NAVIGATION][%s] selector encontrado=%s elementos=%s", step, label, len(elements))
                 for idx, el in enumerate(elements):
+                    try:
+                        if not el.is_displayed():
+                            logger.debug("[NAVIGATION][%s] omitiendo elemento oculto selector=%s idx=%s", step, label, idx)
+                            continue
+                    except Exception:
+                        pass
+                        
                     target = self._find_clickable_target(el)
                     if target is None:
                         logger.debug("[NAVIGATION][%s] elemento sin target clickeable selector=%s idx=%s", step, label, idx)
@@ -286,7 +375,14 @@ class OrderScraper:
         try:
             element.click()
             return True
-        except (ElementClickInterceptedException, StaleElementReferenceException, TimeoutException, Exception) as exc:
+        except ElementClickInterceptedException as exc:
+            logger.debug("[NAVIGATION] click interceptado label=%s. Intentando ESC err=%s", label, exc)
+            try:
+                ActionChains(self.driver).send_keys(Keys.ESCAPE).perform()
+                time.sleep(0.3)
+            except Exception:
+                pass
+        except (StaleElementReferenceException, TimeoutException, Exception) as exc:
             logger.debug("[NAVIGATION] click normal falló label=%s err=%s", label, exc)
 
         try:
@@ -399,6 +495,9 @@ class OrderScraper:
             self.last_run_diagnostics = {"status": "timeout", "step": "wait_orders_panel"}
             return []
 
+        # Esperar indeterminadamente a que desaparezcan los spinners de sincronización
+        self._wait_spinners(timeout_seconds=3600)
+
         time.sleep(0.8)
         self._status("📦 Leyendo lista de pedidos…")
 
@@ -449,6 +548,7 @@ class OrderScraper:
         # Segunda pasada: navegar a cada orden para obtener el ID real
         fallback_seen: dict[str, dict] = {}
         order_count = 0
+        last_extracted_id = None
         for i, (rtype, data) in enumerate(rows_data):
             if rtype != 'order':
                 continue
@@ -462,7 +562,8 @@ class OrderScraper:
             if btn is not None:
                 self._trace_step("order", f"abriendo pedido idx={order_count}")
                 self._debug_pause("open_order")
-                wa_id, detail_text = self._fetch_order_id(btn, order_count)
+                wa_id, detail_text = self._fetch_order_id(btn, order_count, last_extracted_id)
+                last_extracted_id = wa_id if (wa_id and wa_id != '__ORDER_REQUEST__') else last_extracted_id
                 # Después de volver, re-localizar el container
                 try:
                     container = self.driver.find_element(
@@ -472,40 +573,31 @@ class OrderScraper:
                     pass
             
             # Si se obtuvo el ID de WhatsApp, usarlo como ID principal
-            # Si no, generar un ID único basado en hash de datos
-            if wa_id:
+            # Si no, se descarta el pedido a petición del usuario.
+            if wa_id == '__ORDER_REQUEST__':
+                # Es una solicitud de pedido (no confirmado), descartar silenciosamente
+                logger.info(
+                    "[Sync] Orden %s descartada: Solicitud de pedido (no confirmado) cliente='%s'",
+                    order_count,
+                    order.get('cliente'),
+                )
+                self._trace_step("order", f"solicitud de pedido idx={order_count} -> descartado")
+            elif wa_id:
                 order['whatsapp_order_id'] = wa_id
                 order['id'] = wa_id
                 logger.info(f"[Sync] Orden {order_count}: whatsapp_order_id='{wa_id}' cliente='{order.get('cliente')}' monto={order.get('monto')}")
                 self._trace_step("order", f"id extraído idx={order_count} id={wa_id}")
+                orders.append(order)
             else:
-                fallback_id, payload = self._build_fallback_id(order, order_count, detail_text)
-                prev_payload = fallback_seen.get(fallback_id)
-                if prev_payload and prev_payload != payload:
-                    logger.warning(
-                        "[Sync] Colisión de fallback detectada idx=%s fallback_id=%s. Se aplicará disambiguador.",
-                        order_count,
-                        fallback_id,
-                    )
-                    disambiguated = f"{fallback_id}-{order_count}"
-                    fallback_id = disambiguated
-
-                fallback_seen[fallback_id] = payload
-                order['whatsapp_order_id'] = None  # Marcar como no obtenido
-                order['id'] = fallback_id
                 logger.warning(
-                    "[Sync] Orden %s: ID no obtenido, fallback_id='%s' campos=%s raw='%s' detail='%s'",
+                    "[Sync] Orden %s ignorada: ID no obtenido (campos=%s)",
                     order_count,
-                    fallback_id,
-                    payload.get('fields_used'),
-                    payload.get('raw_preview'),
-                    payload.get('detail_preview'),
+                    order.get('cliente')
                 )
-                self._trace_step("order", f"id no extraído idx={order_count} fallback={fallback_id}")
+                self._trace_step("order", f"id no extraído idx={order_count} -> ignorado")
             
-            orders.append(order)
             order_count += 1
-            self._status(f"📦 {len(orders)} orden(es) leída(s)…")
+            self._status(f"📦 {len(orders)} orden(es) válida(s) extraída(s)…")
 
         self._status(f"✅ {len(orders)} pedido(s) importados · {datetime.now().strftime('%H:%M')}")
         if not orders:
@@ -529,13 +621,12 @@ class OrderScraper:
         return orders
 
     def _build_fallback_id(self, order: dict, idx: int, detail_text: str) -> tuple[str, dict]:
-        """Construye fallback robusto por pedido usando máximo contexto disponible."""
+        """Construye fallback robusto por pedido evitando usar el índice o textos relativos que causan duplicados."""
         raw_text = str(order.get('_row_text', '')).strip()
         product = str(order.get('producto', '')).strip()
         payload = {
             'fields_used': [
-                'cliente', 'producto', 'monto', 'fecha',
-                'row_text', 'row_fingerprint', 'row_slot', 'idx', 'detail_text'
+                'cliente', 'producto', 'monto', 'fecha'
             ],
             'cliente': str(order.get('cliente', '')).strip(),
             'producto': product,
@@ -552,39 +643,82 @@ class OrderScraper:
             payload['producto'],
             payload['monto'],
             payload['fecha'],
-            payload['row_text'],
-            payload['row_fingerprint'],
-            payload['row_slot'],
-            payload['idx'],
-            payload['detail_text'],
         ])
         hash_id = hashlib.md5(material.encode()).hexdigest()[:14].upper()
         fallback_id = f"WA-{hash_id}"
         payload['raw_preview'] = payload['row_text'][:120]
         payload['detail_preview'] = payload['detail_text'][:120]
         logger.info(
-            "[Sync] fallback generado idx=%s fallback_id=%s source_row_slot=%s row_fp=%s",
+            "[Sync] fallback invariante generado idx=%s fallback_id=%s source_row_slot=%s",
             idx,
             fallback_id,
             payload['row_slot'],
-            payload['row_fingerprint'],
         )
         return fallback_id, payload
 
     def _wait_orders_panel(self) -> bool:
         selectors = [
-            'button.x6s0dn4.x78zum5.xvt47uu',
-            'div[role="region"]',
-            'div[data-testid="orders-list"]',
+            '[aria-label="Lista de pedidos"]',
+            '[aria-label="Order list"]',
             'div.x1280gxy.x94v8gs.xw2csxc.x1odjw0f.x1n2onr6',
+            'div[data-testid="orders-list"]',
         ]
-        for sel in selectors:
-            try:
-                self._wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, sel)))
-                return True
-            except TimeoutException:
-                continue
-        return False
+        combined_sel = ", ".join(selectors)
+        try:
+            self._wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, combined_sel)))
+            return True
+        except TimeoutException:
+            return False
+
+    def _wait_spinners(self, timeout_seconds: int = 3600):
+        """
+        Espera indeterminadamente hasta que desaparezcan las esferas de carga (spinners).
+        Garantiza que WhatsApp Web haya sincronizado completamente los mensajes y pedidos.
+        """
+        logger.info("[SYNC] Verificando si hay esferas de carga en curso...")
+        start = time.time()
+        selectors = [
+            '[role="progressbar"]',
+            'svg[viewBox="0 0 50 50"]',
+            'circle[stroke-dasharray]',
+            'div[title="Cargando"]',
+            'div[title="Loading"]',
+            '[data-testid="msg-loading"]',
+            '[data-testid="status-v3-spin"]',
+            '[data-testid="circular-progress"]'
+        ]
+        
+        sync_xpath = '//*[contains(translate(text(), "ABCDEFGHIJKLMNOPQRSTUVWXYZÁÉÍÓÚÜ", "abcdefghijklmnopqrstuvwxyzáéíóúü"), "sincronizando") or contains(translate(text(), "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"), "syncing")]'
+        
+        while time.time() - start < timeout_seconds:
+            spinners_active = False
+            for sel in selectors:
+                try:
+                    elements = self.driver.find_elements(By.CSS_SELECTOR, sel)
+                    for el in elements:
+                        if el.is_displayed():
+                            spinners_active = True
+                            break
+                except Exception:
+                    pass
+                if spinners_active:
+                    break
+            
+            if not spinners_active:
+                try:
+                    elements = self.driver.find_elements(By.XPATH, sync_xpath)
+                    for el in elements:
+                        if el.is_displayed():
+                            spinners_active = True
+                            break
+                except Exception:
+                    pass
+            
+            if spinners_active:
+                self._status("⏳ Sincronizando (esfera/texto de carga detectado)...")
+                time.sleep(3)
+            else:
+                break
 
     def _find_orders_container(self):
         selectors = [
@@ -981,6 +1115,8 @@ class OrderScraper:
                     logger.warning("[SCRAPER] Scroll falló (round=%s, attempt=%s): %s", round_no, attempt, exc)
                     time.sleep(0.2)
 
+            # Esperar a que la esfera de carga desaparezca tras el scroll
+            self._wait_spinners(timeout_seconds=3600)
             time.sleep(pause_seconds)
             current = _button_count()
             current_sigs = _visible_signatures()
@@ -1066,7 +1202,7 @@ class OrderScraper:
             pass
         return None
 
-    def _fetch_order_id(self, btn, idx: int) -> tuple[str | None, str]:
+    def _fetch_order_id(self, btn, idx: int, last_extracted_id: str | None = None) -> tuple[str | None, str]:
         """
         Hace clic en el botón de la orden, lee el ID único del panel de detalle
         y vuelve a la lista. Devuelve el ID de WhatsApp o None si no se puede obtener.
@@ -1078,14 +1214,62 @@ class OrderScraper:
         """
         
         try:
-            btn.click()
-            time.sleep(0.5)
+            self._safe_click(btn, f"open-order-{idx}")
+            time.sleep(0.8)
             
-            # Buscar el panel de detalle con timeout generoso
             panel_wait = WebDriverWait(self.driver, 10)
             
             order_id = None
-            detail_text = self._capture_order_detail_text()
+            detail_text = ""
+            
+            # Polling: buscar hasta 6 veces (aprox 3 segundos) el panel con el ID
+            for attempt in range(6):
+                # strict=True asegura que solo se lea el panel derecho, nunca el body global (evitando falsos positivos)
+                detail_text = self._capture_order_detail_text(silent=(attempt > 0), strict=True)
+                
+                # ── Filtro temprano: descartar "Solicitud de pedido" ──
+                # Las solicitudes de pedido tienen un formato distinto a los pedidos
+                # confirmados ("Pedido N.°"). No contienen un ID de WhatsApp válido
+                # y deben descartarse sin perder tiempo en estrategias de extracción.
+                if detail_text and self._is_order_request(detail_text):
+                    logger.info(
+                        "[Orden %s] Descartada: es una 'Solicitud de pedido' (no un pedido confirmado). preview='%s'",
+                        idx, detail_text[:160],
+                    )
+                    self._go_back()
+                    return '__ORDER_REQUEST__', detail_text
+                
+                # Expresión regular ampliada para detectar identificador
+                match = re.search(r'(?i)(pedido\s*n|order\s*id|solicitud\s*n|id|pedido)\.?[°º]?\s*[:#-]?\s*([A-Za-z0-9\-]{8,15})', detail_text)
+                cand = None
+                
+                if match:
+                    cand = match.group(2).strip().upper()
+                else:
+                    # Intento directo: formato típico de WhatsApp ej. 4V67ZPQG4PB (11 caracteres, mayúsculas y números)
+                    raw_match = re.search(r'\b([A-Z0-9]{11,15})\b', detail_text)
+                    if raw_match:
+                        raw_cand = raw_match.group(1)
+                        if re.search(r'[A-Z]', raw_cand) and re.search(r'[0-9]', raw_cand):
+                            cand = raw_cand
+
+                if cand:
+                    # Rompemos el loop si encontramos un ID y es diferente al de la orden anterior,
+                    # garantizando que el DOM de WhatsApp ya se actualizó.
+                    if cand != last_extracted_id:
+                        break
+                
+                time.sleep(0.5)
+                # Si llegamos a la mitad de los intentos y no hay nada nuevo, reintentar el clic
+                if attempt == 2:
+                    try:
+                        self._safe_click(btn, f"retry-open-order-{idx}")
+                    except Exception:
+                        pass
+            
+            # Si después de intentar, detail_text está vacío, intentar un fallback global
+            if not detail_text:
+                detail_text = self._capture_order_detail_text(silent=True, strict=False)
 
             # Intentar múltiples estrategias centradas en contexto de detalle e ID real.
             search_strategies = [
@@ -1156,8 +1340,35 @@ class OrderScraper:
                 if order_id:
                     break
 
-            # Estrategia adicional: buscar en atributos HTML estables.
-            if not order_id:
+            # Estrategia adicional: Buscar directamente en detail_text usando regex
+            if not order_id and detail_text:
+                for m in re.finditer(r'(?i)(?:pedido|solicitud)(\s*n\.?[°º]?|\s*de\s*pedido)?\s*[:#-]?\s*([A-Za-z0-9\-]{8,15})', detail_text):
+                    cand = m.group(2)
+                    ok, reason = self._is_reliable_order_id(cand, "detail_text")
+                    if ok:
+                        order_id = cand.strip().upper()
+                        logger.info("[Orden %s] ID extraído='%s' estrategia=detail_text_regex fuente='PEDIDO N.°'", idx, order_id)
+                        break
+                        
+                if not order_id:
+                    for m in re.finditer(r'(?i)(order\s*id|id)\s*[:#-]?\s*([A-Za-z0-9\-]{8,15})', detail_text):
+                        cand = m.group(2)
+                        ok, reason = self._is_reliable_order_id(cand, "detail_text_en")
+                        if ok:
+                            order_id = cand.strip().upper()
+                            logger.info("[Orden %s] ID extraído='%s' estrategia=detail_text_regex fuente='Order ID'", idx, order_id)
+                            break
+                            
+                # Fallback final: Buscar el patrón clásico directo (ej. 4V67ZPQG4PB)
+                if not order_id:
+                    for m in re.finditer(r'\b([A-Z0-9]{11,15})\b', detail_text):
+                        cand = m.group(1)
+                        if re.search(r'[A-Z]', cand) and re.search(r'[0-9]', cand):
+                            ok, reason = self._is_reliable_order_id(cand, "detail_text_raw")
+                            if ok:
+                                order_id = cand.strip().upper()
+                                logger.info("[Orden %s] ID extraído='%s' estrategia=detail_text_raw_fallback", idx, order_id)
+                                break
                 try:
                     page_source = self.driver.page_source
                     matches = re.findall(r'data-order-id=["\']([A-Za-z0-9\-]{3,})["\']', page_source)
@@ -1189,27 +1400,84 @@ class OrderScraper:
                 pass
             return None, ""
 
-    def _capture_order_detail_text(self) -> str:
-        """Captura texto bruto del panel de detalle del pedido para identidad fallback."""
-        selectors = [
-            'div[data-testid="order-details"]',
-            'div[role="dialog"]',
-            '#main',
+    @staticmethod
+    def _is_order_request(detail_text: str) -> bool:
+        """
+        Detecta si el texto del panel de detalle corresponde a una
+        'Solicitud de pedido' (order request) en lugar de un pedido confirmado.
+        
+        Las solicitudes de pedido:
+        - Contienen 'Solicitud de pedido' / 'Order request'
+        - Tienen 'Aceptar pedido' / 'Accept order' (botón de acción)
+        - Muestran 'total estimado' / 'estimated total'
+        - NO contienen 'PEDIDO N.°' ni un ID de orden real
+        
+        Returns True si es una solicitud (debe descartarse).
+        """
+        txt = (detail_text or '').lower()
+        
+        # Indicadores positivos de solicitud de pedido
+        request_markers = [
+            'solicitud de pedido',
+            'order request',
+            'aceptar pedido',
+            'accept order',
+            'total estimado',
+            'estimated total',
         ]
+        
+        # Indicadores de pedido confirmado (si aparecen, NO es solicitud)
+        confirmed_markers = [
+            'pedido n',     # "PEDIDO N.°" 
+            'order n',      # "ORDER N.°"
+            'pedido #',
+            'order #',
+            'order id',
+            'id de pedido',
+        ]
+        
+        has_request = any(marker in txt for marker in request_markers)
+        has_confirmed = any(marker in txt for marker in confirmed_markers)
+        
+        return has_request and not has_confirmed
+
+    def _capture_order_detail_text(self, silent: bool = False, strict: bool = True) -> str:
+        """Captura texto bruto del panel de detalle del pedido para extraer el ID y como fallback."""
+        selectors = [
+            'div[aria-label="Detalles del pedido"]',
+            'div[aria-label="Order details"]',
+            'div[data-testid="order-details"]',
+            'div[data-testid="right-drawer"]',
+            'div[data-testid="drawer-right"]',
+            'div[role="dialog"]',
+        ]
+        
+        # Esperar un poco a que el panel derecho renderice
+        time.sleep(0.5)
+        
         for sel in selectors:
             try:
                 el = self.driver.find_element(By.CSS_SELECTOR, sel)
-                text = ' '.join((el.text or '').split())
-                if text:
-                    logger.info("[Orden][detail] fuente=%s preview='%s'", sel, text[:160])
-                    return text
+                if el.is_displayed():
+                    text = ' '.join((el.text or '').split())
+                    if text:
+                        if not silent:
+                            logger.info("[Orden][detail] fuente=%s preview='%s'", sel, text[:160])
+                        return text
             except Exception:
                 continue
+        
+        if strict:
+            return ""
+
+        # Si no encontró los drawers específicos, intenta buscar cualquier contenedor de la derecha
         try:
+            # WhatsApp divide la pantalla tipicamente usando elementos flex, buscamos el contenedor más a la derecha
             body = self.driver.find_element(By.TAG_NAME, 'body')
             text = ' '.join((body.text or '').split())
             if text:
-                logger.info("[Orden][detail] fuente=body preview='%s'", text[:160])
+                if not silent:
+                    logger.info("[Orden][detail] fuente=body preview='%s'", text[:160])
                 return text
         except Exception:
             pass
@@ -1217,38 +1485,13 @@ class OrderScraper:
 
     def _go_back(self):
         """
-        Hace clic en el botón Volver del panel de detalle y espera
-        a que reaparezca la lista de órdenes.
+        Ya no cerramos el panel de detalle derecho.
+        Dejarlo abierto mejora drásticamente el rendimiento y la estabilidad porque
+        al hacer clic en la siguiente fila de la lista, el panel simplemente actualiza 
+        su contenido en lugar de tener que reproducir la animación de apertura, 
+        la cual era demasiado lenta y causaba fallos intermitentes en la captura.
         """
-        back_selectors = [
-            'button[aria-label="Back"]',
-            'button[aria-label="Volver"]',
-            'button[aria-label="Atrás"]',
-            'button[data-tab="2"]',
-        ]
-        for sel in back_selectors:
-            try:
-                btn = WebDriverWait(self.driver, 4).until(
-                    EC.element_to_be_clickable((By.CSS_SELECTOR, sel)))
-                btn.click()
-                break
-            except TimeoutException:
-                continue
-
-        # Intentar también con JS si los selectores fallan (botón de navegador)
-        try:
-            WebDriverWait(self.driver, 6).until(
-                EC.presence_of_element_located(
-                    (By.CSS_SELECTOR, 'button.x6s0dn4.x78zum5.xvt47uu')))
-        except TimeoutException:
-            # Si no aparece la lista, intentar con el botón atrás del navegador
-            try:
-                self.driver.execute_script("window.history.back()")
-                time.sleep(1)
-            except Exception as exc:
-                logger.warning("[NAVIGATION] No se pudo volver con history.back(): %s", exc)
-
-        time.sleep(0.6)
+        time.sleep(0.3)
 
     # ── Parseo de una fila de orden ───────────────────────────────────────────
     def _parse_order_row(self, btn, cur_date: date, idx: int) -> dict | None:
@@ -1318,24 +1561,41 @@ class OrderScraper:
                     )
             order['monto'] = float(monto)
 
-            # Producto
-            producto = next(
-                (sp.get_attribute('title').strip()
-                 for sp in btn.find_elements(By.CSS_SELECTOR, 'span[title]')
-                 if sp.get_attribute('title')
-                 and not re.fullmatch(r'[\d\s\+\-]+', sp.get_attribute('title').strip())),
-                'Sin descripción')
-            order['producto'] = producto
-
             # Estado
             estado_raw = next(
                 (sp.text.strip()
                  for sp in reversed(btn.find_elements(By.TAG_NAME, 'span'))
                  if sp.text.strip()
                  and not (sp.get_attribute('title') or '')
-                 and not re.search(r'(COP|USD|\$)', sp.text, re.I)),
+                 and not re.search(r'(COP|USD|\$|€)', sp.text, re.I)),
                 '')
             order['estado'] = ESTADO_MAP.get(estado_raw.lower(), estado_raw or 'Desconocido')
+
+            # Producto (Deducción por exclusión del texto de la fila)
+            clean_product = row_text
+            if order.get('cliente') and order['cliente'] != 'Desconocido':
+                clean_product = clean_product.replace(order['cliente'], '', 1)
+            if selected_source:
+                clean_product = clean_product.replace(selected_source, '', 1)
+            if estado_raw:
+                clean_product = clean_product.replace(estado_raw, '', 1)
+            
+            # Limpiar caracteres especiales sobrantes en los bordes
+            clean_product = re.sub(r'^[^\w]+|[^\w]+$', '', clean_product.strip())
+            
+            if len(clean_product) > 0:
+                producto = clean_product
+            else:
+                # Fallback al viejo método si todo falla
+                producto = next(
+                    (sp.get_attribute('title').strip()
+                     for sp in btn.find_elements(By.CSS_SELECTOR, 'span[title]')
+                     if sp.get_attribute('title')
+                     and not re.fullmatch(r'[\d\s\+\-]+', sp.get_attribute('title').strip())
+                     and sp.get_attribute('title').strip() != order.get('cliente', '')),
+                    'Artículos de carrito')
+            
+            order['producto'] = producto
 
             return order
 

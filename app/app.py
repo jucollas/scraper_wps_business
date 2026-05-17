@@ -7,7 +7,7 @@ import sys
 import logging
 import tkinter as tk
 from tkinter import ttk, messagebox
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from collections import defaultdict
 import threading
 import time
@@ -46,26 +46,29 @@ logger = logging.getLogger(__name__)
 ctk.set_appearance_mode("light")
 ctk.set_default_color_theme("blue")
 
-SIDEBAR_BG      = "#0F172A"
-SIDEBAR_SECTION = "#1E293B"
-SIDEBAR_HOVER   = "#334155"
-SIDEBAR_ACTIVE  = "#4F46E5"
-CONTENT_BG      = "#F1F5F9"
+SIDEBAR_BG      = "#2C1E16"
+SIDEBAR_SECTION = "#3E2723"
+SIDEBAR_HOVER   = "#5D4037"
+SIDEBAR_ACTIVE  = "#4CAF50"
+CONTENT_BG      = "#F4EADC"
 CARD_BG         = "#FFFFFF"
-BORDER          = "#E2E8F0"
-PRIMARY         = "#4F46E5"
-PRIMARY_HOVER   = "#4338CA"
-SUCCESS         = "#10B981"
-SUCCESS_LIGHT   = "#D1FAE5"
+BORDER          = "#D7CCC8"
+PRIMARY         = "#7C4A3A"
+PRIMARY_HOVER   = "#5A3326"
+SUCCESS         = "#4CAF50"
+SUCCESS_LIGHT   = "#E8F5E9"
 WARNING         = "#F59E0B"
 WARNING_LIGHT   = "#FEF3C7"
 DANGER          = "#EF4444"
 WA_GREEN        = "#25D366"
 WA_DARK         = "#075E54"
-TEXT_TITLE      = "#0F172A"
-TEXT_PRIMARY    = "#1E293B"
-TEXT_SECONDARY  = "#64748B"
-TEXT_MUTED      = "#94A3B8"
+TEXT_TITLE      = "#3E2723"
+TEXT_PRIMARY    = "#4E342E"
+TEXT_SECONDARY  = "#6D4C41"
+TEXT_MUTED      = "#A1887F"
+
+# Estados que generan ingreso (todo excepto Pendiente y Cancelado)
+PAID_STATES = {"Completado", "Enviado", "Envío en preparación", "Entregado"}
 
 CHART_COLORS = ["#4F46E5","#10B981","#F59E0B","#EF4444","#8B5CF6",
                 "#06B6D4","#EC4899","#84CC16"]
@@ -82,12 +85,13 @@ MESES_CORTOS = ["Ene","Feb","Mar","Abr","May","Jun",
 class App(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self.title("WBS Order Manager")
+        self.title("Café Pa'l Monte")
         self.geometry("1260x820")
         self.minsize(1000, 660)
         self.orders        = []
         self.driver        = None
         self.connected     = False
+        self.is_auto_sync  = False
         self._sort_col     = None
         self._sort_rev     = False
         self._current_page = "panel"
@@ -136,11 +140,23 @@ class App(ctk.CTk):
 
         logo_wrap = ctk.CTkFrame(sb, fg_color="transparent")
         logo_wrap.grid(row=0, column=0, padx=20, pady=(28, 20), sticky="ew")
-        ctk.CTkLabel(logo_wrap, text="⬡", font=ctk.CTkFont(family=EF, size=30, weight="bold"),
-                     text_color=WA_GREEN).pack(side="left", padx=(0, 12))
+
+        img_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "logo.jpg")
+        if os.path.exists(img_path) and PIL_OK:
+            try:
+                logo_img = ctk.CTkImage(light_image=Image.open(img_path), size=(40, 40))
+                ctk.CTkLabel(logo_wrap, text="", image=logo_img).pack(side="left", padx=(0, 12))
+            except Exception as e:
+                logger.warning(f"Error loading logo: {e}")
+                ctk.CTkLabel(logo_wrap, text="⬡", font=ctk.CTkFont(family=EF, size=30, weight="bold"),
+                             text_color=WA_GREEN).pack(side="left", padx=(0, 12))
+        else:
+            ctk.CTkLabel(logo_wrap, text="⬡", font=ctk.CTkFont(family=EF, size=30, weight="bold"),
+                         text_color=WA_GREEN).pack(side="left", padx=(0, 12))
+
         nc = ctk.CTkFrame(logo_wrap, fg_color="transparent")
         nc.pack(side="left")
-        ctk.CTkLabel(nc, text="WBS Manager",
+        ctk.CTkLabel(nc, text="Pa'l Monte",
                      font=ctk.CTkFont(size=15, weight="bold"),
                      text_color="#F8FAFC").pack(anchor="w")
         ctk.CTkLabel(nc, text="WhatsApp Business",
@@ -215,12 +231,20 @@ class App(ctk.CTk):
         self.btn_connect.pack(fill="x", pady=(0, 6))
 
         self.btn_sync = ctk.CTkButton(
-            conn, text="🔄  Sincronizar pedidos",
+            conn, text="🔄  Sincronización Manual",
             fg_color=PRIMARY, hover_color=PRIMARY_HOVER, text_color="white",
             font=ctk.CTkFont(family=EF, size=12), height=38, corner_radius=8,
             command=self._sync)
         self.btn_sync.pack(fill="x", pady=(0, 4))
         self.btn_sync.pack_forget()
+
+        self.btn_sync_auto = ctk.CTkButton(
+            conn, text="🤖  Sincronización Automática",
+            fg_color="#8B5CF6", hover_color="#7C3AED", text_color="white",
+            font=ctk.CTkFont(family=EF, size=12), height=38, corner_radius=8,
+            command=self._toggle_auto_sync)
+        self.btn_sync_auto.pack(fill="x", pady=(0, 4))
+        self.btn_sync_auto.pack_forget()
 
         self.btn_disconnect = ctk.CTkButton(
             conn, text="Desconectar",
@@ -231,7 +255,7 @@ class App(ctk.CTk):
         self.btn_disconnect.pack(fill="x")
         self.btn_disconnect.pack_forget()
 
-        ctk.CTkLabel(sb, text="v1.0.0 · WBS Order Manager",
+        ctk.CTkLabel(sb, text="v1.0.0 · Café Pa'l Monte",
                      font=ctk.CTkFont(size=9), text_color=TEXT_MUTED).grid(
             row=7, column=0, padx=16, pady=(8, 16))
 
@@ -352,17 +376,20 @@ class App(ctk.CTk):
             "count":      tk.StringVar(value="0"),
             "completado": tk.StringVar(value="0"),
             "pendiente":  tk.StringVar(value="0"),
+            "cancelado":  tk.StringVar(value="0"),
         }
-        for i, (label, key, color, light, icon) in enumerate([
+        kpi_items = [
             ("Total Facturado",  "total",      PRIMARY,  "#EEF2FF",     "💰"),
             ("Órdenes Totales",  "count",      WA_DARK,  "#ECFDF5",     "📦"),
-            ("Completadas",      "completado", SUCCESS,  SUCCESS_LIGHT, "✅"),
+            ("Pagadas",          "completado", SUCCESS,  SUCCESS_LIGHT, "✅"),
             ("Pendientes",       "pendiente",  WARNING,  WARNING_LIGHT, "⏳"),
-        ]):
+            ("Canceladas",       "cancelado",  DANGER,   "#FFF1F2",     "❌"),
+        ]
+        for i, (label, key, color, light, icon) in enumerate(kpi_items):
             card = tk.Frame(wrap, bg=CARD_BG,
                             highlightthickness=1, highlightbackground=BORDER)
             card.pack(side="left", expand=True, fill="x",
-                      padx=(0, 14) if i < 3 else 0)
+                      padx=(0, 14) if i < len(kpi_items) - 1 else 0)
             inner = tk.Frame(card, bg=CARD_BG)
             inner.pack(padx=18, pady=16, fill="x")
             top = tk.Frame(inner, bg=CARD_BG)
@@ -487,6 +514,9 @@ class App(ctk.CTk):
         self.tree.tag_configure("completado", foreground="#065F46", background="#F0FDF4")
         self.tree.tag_configure("pendiente",  foreground="#92400E", background="#FFFBEB")
         self.tree.tag_configure("cancelado",  foreground="#991B1B", background="#FFF1F2")
+        self.tree.tag_configure("enviado",    foreground="#1E40AF", background="#EFF6FF")
+        self.tree.tag_configure("envío en preparación", foreground="#6D28D9", background="#F5F3FF")
+        self.tree.tag_configure("entregado",  foreground="#065F46", background="#F0FDF4")
         self.tree.tag_configure("error",      foreground=TEXT_MUTED)
         self.tree.tag_configure("alt_row",    background="#FAFAFA")
         sb2 = ttk.Scrollbar(card, orient="vertical", command=self.tree.yview)
@@ -500,10 +530,17 @@ class App(ctk.CTk):
     def _build_analytics_page(self, container):
         self._analytics_page = tk.Frame(container, bg=CONTENT_BG)
         self._analytics_page.grid_columnconfigure(0, weight=1)
-        self._analytics_page.grid_rowconfigure(2, weight=1)
+        self._analytics_page.grid_rowconfigure(1, weight=1)
         self._build_analytics_filter(self._analytics_page)
-        self._build_analytics_kpis(self._analytics_page)
-        self._build_analytics_charts(self._analytics_page)
+
+        # Scrollable content for all analytics
+        self._an_scroll = ctk.CTkScrollableFrame(
+            self._analytics_page, fg_color=CONTENT_BG, corner_radius=0)
+        self._an_scroll.grid(row=1, column=0, sticky="nsew", padx=0, pady=0)
+        self._an_scroll.grid_columnconfigure(0, weight=1)
+
+        self._build_analytics_kpis(self._an_scroll)
+        self._build_analytics_charts(self._an_scroll)
 
     def _build_analytics_filter(self, parent):
         card = tk.Frame(parent, bg=CARD_BG,
@@ -550,7 +587,7 @@ class App(ctk.CTk):
 
     def _build_analytics_kpis(self, parent):
         wrap = tk.Frame(parent, bg=CONTENT_BG)
-        wrap.grid(row=1, column=0, sticky="ew", padx=24, pady=(14, 0))
+        wrap.pack(fill="x", padx=24, pady=(14, 0))
         self._an_kpi_vars = {
             "ticket_prom":   tk.StringVar(value="$0.00"),
             "prod_estrella": tk.StringVar(value="---"),
@@ -561,7 +598,7 @@ class App(ctk.CTk):
             ("Ticket Promedio",     "ticket_prom",   PRIMARY,  "#EEF2FF"),
             ("Producto Estrella",   "prod_estrella", SUCCESS,  SUCCESS_LIGHT),
             ("Mejor Cliente",       "mejor_cliente", WA_DARK,  "#ECFDF5"),
-            ("Tasa de Completadas", "tasa_comp",     WARNING,  WARNING_LIGHT),
+            ("Tasa de Pagadas",     "tasa_comp",     WARNING,  WARNING_LIGHT),
         ]):
             card = tk.Frame(wrap, bg=CARD_BG,
                             highlightthickness=1, highlightbackground=BORDER)
@@ -577,29 +614,49 @@ class App(ctk.CTk):
                      wraplength=160).pack(anchor="w", pady=(6, 0))
 
     def _build_analytics_charts(self, parent):
-        outer = tk.Frame(parent, bg=CONTENT_BG)
-        outer.grid(row=2, column=0, sticky="nsew", padx=24, pady=(14, 20))
-        outer.grid_columnconfigure(0, weight=1)
-        outer.grid_rowconfigure(0, weight=3)
-        outer.grid_rowconfigure(1, weight=4)
+        # Row 1: Ventas mensuales (full width)
+        self._chart_monthly = tk.Frame(parent, bg=CARD_BG,
+                                        highlightthickness=1, highlightbackground=BORDER,
+                                        height=320)
+        self._chart_monthly.pack(fill="x", padx=24, pady=(14, 0))
+        self._chart_monthly.pack_propagate(False)
 
-        self._chart_monthly = tk.Frame(outer, bg=CARD_BG,
-                                        highlightthickness=1, highlightbackground=BORDER)
-        self._chart_monthly.grid(row=0, column=0, sticky="nsew", pady=(0, 12))
+        # Row 2: Ventas anuales (full width)
+        self._chart_annual = tk.Frame(parent, bg=CARD_BG,
+                                       highlightthickness=1, highlightbackground=BORDER,
+                                       height=320)
+        self._chart_annual.pack(fill="x", padx=24, pady=(12, 0))
+        self._chart_annual.pack_propagate(False)
 
-        bottom = tk.Frame(outer, bg=CONTENT_BG)
-        bottom.grid(row=1, column=0, sticky="nsew")
-        bottom.grid_columnconfigure(0, weight=4)
-        bottom.grid_columnconfigure(1, weight=6)
-        bottom.grid_rowconfigure(0, weight=1)
+        # Row 3: Canceladas por mes (full width)
+        self._chart_cancelled = tk.Frame(parent, bg=CARD_BG,
+                                          highlightthickness=1, highlightbackground=BORDER,
+                                          height=300)
+        self._chart_cancelled.pack(fill="x", padx=24, pady=(12, 0))
+        self._chart_cancelled.pack_propagate(False)
 
-        self._chart_pie = tk.Frame(bottom, bg=CARD_BG,
+        # Row 4: Pie + Top Products side by side
+        row4 = tk.Frame(parent, bg=CONTENT_BG, height=340)
+        row4.pack(fill="x", padx=24, pady=(12, 0))
+        row4.pack_propagate(False)
+        row4.grid_columnconfigure(0, weight=4)
+        row4.grid_columnconfigure(1, weight=6)
+        row4.grid_rowconfigure(0, weight=1)
+
+        self._chart_pie = tk.Frame(row4, bg=CARD_BG,
                                     highlightthickness=1, highlightbackground=BORDER)
         self._chart_pie.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
 
-        self._chart_products = tk.Frame(bottom, bg=CARD_BG,
+        self._chart_products = tk.Frame(row4, bg=CARD_BG,
                                          highlightthickness=1, highlightbackground=BORDER)
         self._chart_products.grid(row=0, column=1, sticky="nsew")
+
+        # Row 5: Top Customers (full width)
+        self._chart_customers = tk.Frame(parent, bg=CARD_BG,
+                                          highlightthickness=1, highlightbackground=BORDER,
+                                          height=340)
+        self._chart_customers.pack(fill="x", padx=24, pady=(12, 20))
+        self._chart_customers.pack_propagate(False)
 
     # ──────────────────────────────────────────────────────────────────────────
     # LOGICA DE ANALITICA
@@ -628,14 +685,17 @@ class App(ctk.CTk):
         orders = self._get_analytics_orders()
         self._validate_orders_for_analytics(orders)
         year   = int(self._an_year_var.get())
-        total_rev = sum(o["monto"] for o in orders)
+        total_rev = sum(o["monto"] for o in orders if o.get("estado") in PAID_STATES)
         logger.info("[ANALYTICS] Refresh year=%s count=%s revenue=%.2f", year, len(orders), total_rev)
         self._an_lbl_info.config(
             text=f"{len(orders)} ordenes  ·  ${total_rev:,.2f} total")
         self._refresh_analytics_kpis(orders)
         self._draw_monthly_revenue(orders, year)
+        self._draw_annual_sales(year)
+        self._draw_cancelled_per_month(orders, year)
         self._draw_status_pie(orders)
         self._draw_top_products(orders)
+        self._draw_top_customers(orders)
 
     def _validate_orders_for_analytics(self, orders: list):
         """Traza consistencia entre pedidos usados y métricas calculables."""
@@ -670,34 +730,36 @@ class App(ctk.CTk):
                 self._an_kpi_vars[k].set("Sin datos")
             logger.info("[ANALYTICS] KPIs sin datos para el filtro actual")
             return
-        total  = sum(o["monto"] for o in orders)
+        paid = sum(1 for o in orders if o.get("estado") in PAID_STATES)
+        total  = sum(o["monto"] for o in orders if o.get("estado") in PAID_STATES)
         count  = len(orders)
-        complt = sum(1 for o in orders if o["estado"] == "Completado")
-        self._an_kpi_vars["ticket_prom"].set(f"${total / count:,.2f}")
+        self._an_kpi_vars["ticket_prom"].set(f"${total / paid:,.2f}" if paid else "$0.00")
         rev_prod = defaultdict(float)
         for o in orders:
-            rev_prod[o["producto"]] += o["monto"]
+            if o.get("estado") in PAID_STATES:
+                rev_prod[o["producto"]] += o["monto"]
         if rev_prod:
             bp = max(rev_prod, key=rev_prod.__getitem__)
             self._an_kpi_vars["prod_estrella"].set(bp[:22] + "..." if len(bp) > 22 else bp)
         rev_cli = defaultdict(float)
         for o in orders:
-            rev_cli[o["cliente"]] += o["monto"]
+            if o.get("estado") in PAID_STATES:
+                rev_cli[o["cliente"]] += o["monto"]
         if rev_cli:
             bc = max(rev_cli, key=rev_cli.__getitem__)
             self._an_kpi_vars["mejor_cliente"].set(bc[:22] + "..." if len(bc) > 22 else bc)
-        tasa = (complt / count * 100) if count else 0
+        tasa = (paid / count * 100) if count else 0
         self._an_kpi_vars["tasa_comp"].set(f"{tasa:.1f}%")
         logger.info(
-            "[ANALYTICS] KPIs count=%s total=%.2f completadas=%s tasa=%.1f%%",
-            count, total, complt, tasa)
+            "[ANALYTICS] KPIs count=%s total=%.2f pagadas=%s tasa=%.1f%%",
+            count, total, paid, tasa)
 
     def _draw_monthly_revenue(self, orders: list, year: int):
         self._clear_frame(self._chart_monthly)
         monthly     = defaultdict(float)
         monthly_cnt = defaultdict(int)
         for o in orders:
-            if o["fecha"].startswith(f"{year:04d}"):
+            if o["fecha"].startswith(f"{year:04d}") and o.get("estado") in PAID_STATES:
                 m = int(o["fecha"][5:7])
                 monthly[m]     += o["monto"]
                 monthly_cnt[m] += 1
@@ -744,16 +806,18 @@ class App(ctk.CTk):
 
     def _draw_status_pie(self, orders: list):
         self._clear_frame(self._chart_pie)
-        cnt_map = {"Completado": 0, "Pendiente": 0, "Cancelado": 0, "Desconocido": 0}
+        cnt_map = defaultdict(int)
         for o in orders:
-            key = o["estado"] if o["estado"] in cnt_map else "Desconocido"
-            cnt_map[key] += 1
+            cnt_map[o.get("estado", "Desconocido")] += 1
         labels     = [k for k, v in cnt_map.items() if v > 0]
         sizes      = [v for v in cnt_map.values()  if v > 0]
         pie_colors = {
             "Completado": SUCCESS,
             "Pendiente": WARNING,
             "Cancelado": DANGER,
+            "Enviado": "#3B82F6",
+            "Envío en preparación": "#8B5CF6",
+            "Entregado": "#06B6D4",
             "Desconocido": TEXT_MUTED,
         }
 
@@ -773,7 +837,7 @@ class App(ctk.CTk):
         ax  = fig.add_subplot(111)
         wedges, texts, autotexts = ax.pie(
             sizes, labels=labels,
-            colors=[pie_colors[l] for l in labels],
+            colors=[pie_colors.get(l, TEXT_MUTED) for l in labels],
             autopct=lambda p: f"{p:.1f}%\n({int(round(p * sum(sizes) / 100))})",
             startangle=90, pctdistance=0.72,
             wedgeprops={"linewidth": 2, "edgecolor": CARD_BG})
@@ -791,7 +855,8 @@ class App(ctk.CTk):
         self._clear_frame(self._chart_products)
         rev_prod = defaultdict(float)
         for o in orders:
-            rev_prod[o["producto"]] += o["monto"]
+            if o.get("estado") in PAID_STATES:
+                rev_prod[o["producto"]] += o["monto"]
         top5 = sorted(rev_prod.items(), key=lambda x: x[1], reverse=True)[:5]
 
         hdr = tk.Frame(self._chart_products, bg=CARD_BG)
@@ -835,8 +900,165 @@ class App(ctk.CTk):
         canvas.draw()
         canvas.get_tk_widget().pack(fill="both", expand=True, padx=4, pady=(4, 10))
 
+    def _draw_annual_sales(self, current_year: int):
+        """Gráfico de ventas anuales — compara los últimos 5 años."""
+        self._clear_frame(self._chart_annual)
+        all_orders = self.orders  # Usar todas las órdenes, no solo las filtradas
+        year_rev = defaultdict(float)
+        year_cnt = defaultdict(int)
+        for o in all_orders:
+            if o.get("estado") in PAID_STATES:
+                try:
+                    y = int(o["fecha"][:4])
+                    year_rev[y] += o["monto"]
+                    year_cnt[y] += 1
+                except (ValueError, KeyError):
+                    pass
+        years = sorted(set(range(current_year - 4, current_year + 1)) | set(year_rev.keys()))[-5:]
+        revenues = [year_rev.get(y, 0.0) for y in years]
+        counts = [year_cnt.get(y, 0) for y in years]
+
+        hdr = tk.Frame(self._chart_annual, bg=CARD_BG)
+        hdr.pack(fill="x", padx=20, pady=(14, 0))
+        tk.Label(hdr, text="Ventas anuales",
+                 bg=CARD_BG, fg=TEXT_TITLE,
+                 font=("Segoe UI", 12, "bold")).pack(side="left")
+        total_all = sum(revenues)
+        tk.Label(hdr, text=f"  Acumulado: ${total_all:,.2f}",
+                 bg=CARD_BG, fg=TEXT_SECONDARY,
+                 font=("Segoe UI", 10)).pack(side="left", padx=(8, 0))
+
+        fig = Figure(facecolor=CARD_BG)
+        fig.subplots_adjust(left=0.08, right=0.97, top=0.85, bottom=0.16)
+        ax = fig.add_subplot(111)
+        bar_colors = [SUCCESS if y == current_year else "#8B5CF6" for y in years]
+        bars = ax.bar(range(len(years)), revenues, width=0.55, zorder=2,
+                      color=bar_colors, alpha=0.88)
+        ax.set_xticks(range(len(years)))
+        ax.set_xticklabels([str(y) for y in years], fontsize=10, color=TEXT_SECONDARY)
+        ax.yaxis.set_major_formatter(
+            mticker.FuncFormatter(lambda x, _: f"${x:,.0f}"))
+        ax.tick_params(axis="y", labelsize=9, labelcolor=TEXT_SECONDARY)
+        ax.set_facecolor(CARD_BG)
+        for spine in ["top", "right", "left"]:
+            ax.spines[spine].set_visible(False)
+        ax.spines["bottom"].set_color(BORDER)
+        ax.yaxis.grid(True, color=BORDER, linewidth=0.8, zorder=0)
+        ax.set_axisbelow(True)
+        max_rev = max(revenues) if any(revenues) else 1
+        for bar, rev, cnt in zip(bars, revenues, counts):
+            if rev > 0:
+                ax.text(bar.get_x() + bar.get_width() / 2,
+                        rev + max_rev * 0.02,
+                        f"${rev:,.0f}\n({cnt} ord.)", ha="center", va="bottom",
+                        fontsize=8, color=TEXT_PRIMARY, fontweight="bold")
+        canvas = FigureCanvasTkAgg(fig, master=self._chart_annual)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill="both", expand=True, padx=4, pady=(4, 10))
+
+    def _draw_cancelled_per_month(self, orders: list, year: int):
+        """Gráfico de órdenes canceladas por mes."""
+        self._clear_frame(self._chart_cancelled)
+        monthly_cancelled = defaultdict(int)
+        for o in orders:
+            if o["fecha"].startswith(f"{year:04d}") and o.get("estado") == "Cancelado":
+                m = int(o["fecha"][5:7])
+                monthly_cancelled[m] += 1
+        counts = [monthly_cancelled.get(m, 0) for m in range(1, 13)]
+        total_cancelled = sum(counts)
+
+        hdr = tk.Frame(self._chart_cancelled, bg=CARD_BG)
+        hdr.pack(fill="x", padx=20, pady=(14, 0))
+        tk.Label(hdr, text=f"Órdenes canceladas por mes - {year}",
+                 bg=CARD_BG, fg=TEXT_TITLE,
+                 font=("Segoe UI", 12, "bold")).pack(side="left")
+        tk.Label(hdr, text=f"  Total: {total_cancelled}",
+                 bg=CARD_BG, fg=DANGER,
+                 font=("Segoe UI", 10, "bold")).pack(side="left", padx=(8, 0))
+
+        fig = Figure(facecolor=CARD_BG)
+        fig.subplots_adjust(left=0.06, right=0.97, top=0.85, bottom=0.16)
+        ax = fig.add_subplot(111)
+        bar_colors = [DANGER if c > 0 else "#E2E8F0" for c in counts]
+        bars = ax.bar(range(12), counts, width=0.6, zorder=2,
+                      color=bar_colors, alpha=0.88)
+        ax.set_xticks(range(12))
+        ax.set_xticklabels(MESES_CORTOS, fontsize=9, color=TEXT_SECONDARY)
+        ax.yaxis.set_major_locator(mticker.MaxNLocator(integer=True))
+        ax.tick_params(axis="y", labelsize=9, labelcolor=TEXT_SECONDARY)
+        ax.set_facecolor(CARD_BG)
+        for spine in ["top", "right", "left"]:
+            ax.spines[spine].set_visible(False)
+        ax.spines["bottom"].set_color(BORDER)
+        ax.yaxis.grid(True, color=BORDER, linewidth=0.8, zorder=0)
+        ax.set_axisbelow(True)
+        max_c = max(counts) if any(counts) else 1
+        for bar, cnt in zip(bars, counts):
+            if cnt > 0:
+                ax.text(bar.get_x() + bar.get_width() / 2,
+                        cnt + max_c * 0.02,
+                        str(cnt), ha="center", va="bottom",
+                        fontsize=9, color=DANGER, fontweight="bold")
+        canvas = FigureCanvasTkAgg(fig, master=self._chart_cancelled)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill="both", expand=True, padx=4, pady=(4, 10))
+
+    def _draw_top_customers(self, orders: list):
+        """Top 10 clientes que más compran (por ingreso pagado)."""
+        self._clear_frame(self._chart_customers)
+        rev_cli = defaultdict(lambda: {"revenue": 0.0, "orders": 0})
+        for o in orders:
+            if o.get("estado") in PAID_STATES:
+                rev_cli[o["cliente"]]["revenue"] += o["monto"]
+                rev_cli[o["cliente"]]["orders"] += 1
+        top10 = sorted(rev_cli.items(), key=lambda x: x[1]["revenue"], reverse=True)[:10]
+
+        hdr = tk.Frame(self._chart_customers, bg=CARD_BG)
+        hdr.pack(fill="x", padx=16, pady=(14, 0))
+        tk.Label(hdr, text="Top 10 clientes por ingreso",
+                 bg=CARD_BG, fg=TEXT_TITLE,
+                 font=("Segoe UI", 12, "bold")).pack(side="left")
+
+        if not top10:
+            tk.Label(self._chart_customers, text="Sin datos",
+                     bg=CARD_BG, fg=TEXT_MUTED, font=("Segoe UI", 11)).pack(expand=True)
+            return
+
+        names = [n[:24] + "..." if len(n) > 24 else n for n, _ in top10]
+        values = [d["revenue"] for _, d in top10]
+        order_counts = [d["orders"] for _, d in top10]
+        max_v = max(values) if values else 1
+
+        fig = Figure(facecolor=CARD_BG)
+        fig.subplots_adjust(left=0.22, right=0.93, top=0.92, bottom=0.08)
+        ax = fig.add_subplot(111)
+        gradient_colors = ["#4F46E5", "#6366F1", "#818CF8", "#A5B4FC", "#C7D2FE",
+                           "#06B6D4", "#14B8A6", "#10B981", "#34D399", "#6EE7B7"]
+        bars = ax.barh(range(len(names)), values, height=0.55, zorder=2,
+                       color=gradient_colors[:len(names)], alpha=0.88)
+        ax.set_yticks(range(len(names)))
+        ax.set_yticklabels(names, fontsize=9, color=TEXT_PRIMARY)
+        ax.invert_yaxis()
+        ax.xaxis.set_major_formatter(
+            mticker.FuncFormatter(lambda x, _: f"${x:,.0f}"))
+        ax.tick_params(axis="x", labelsize=9, labelcolor=TEXT_SECONDARY)
+        ax.set_facecolor(CARD_BG)
+        for spine in ["top", "right", "bottom"]:
+            ax.spines[spine].set_visible(False)
+        ax.spines["left"].set_color(BORDER)
+        ax.xaxis.grid(True, color=BORDER, linewidth=0.8, zorder=0)
+        ax.set_axisbelow(True)
+        for bar, val, oc in zip(bars, values, order_counts):
+            ax.text(val + max_v * 0.01, bar.get_y() + bar.get_height() / 2,
+                    f"${val:,.0f} ({oc} ord.)", va="center",
+                    fontsize=8, color=TEXT_PRIMARY, fontweight="bold")
+        canvas = FigureCanvasTkAgg(fig, master=self._chart_customers)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill="both", expand=True, padx=4, pady=(4, 10))
+
     def _show_no_matplotlib_msg(self):
-        for frame in [self._chart_monthly, self._chart_pie, self._chart_products]:
+        for frame in [self._chart_monthly, self._chart_annual, self._chart_cancelled,
+                      self._chart_pie, self._chart_products, self._chart_customers]:
             self._clear_frame(frame)
             tk.Label(frame,
                      text="Instala matplotlib:\npip install matplotlib",
@@ -952,7 +1174,7 @@ class App(ctk.CTk):
         card.place(relx=0.5, rely=0.5, anchor="center")
         card.pack_propagate(False)
 
-        ctk.CTkLabel(card, text="WBS",
+        ctk.CTkLabel(card, text="Pa'l Monte",
                      font=ctk.CTkFont(size=28, weight="bold"),
                      text_color=WA_GREEN).pack(pady=(28, 0))
         ctk.CTkLabel(card, text="Conectar WhatsApp",
@@ -1176,7 +1398,30 @@ class App(ctk.CTk):
 
     def _sync(self):
         self.btn_sync.configure(state="disabled", text="Sincronizando...")
+        self.btn_sync_auto.configure(state="disabled")
         threading.Thread(target=self._do_sync, daemon=True).start()
+
+    def _toggle_auto_sync(self):
+        self.is_auto_sync = not self.is_auto_sync
+        if self.is_auto_sync:
+            self.btn_sync_auto.configure(text="⏹️  Detener Sincronización Automática", fg_color=DANGER, hover_color="#DC2626")
+            self.btn_sync.configure(state="disabled")
+            threading.Thread(target=self._auto_sync_loop, daemon=True).start()
+        else:
+            self.btn_sync_auto.configure(text="🤖  Sincronización Automática", fg_color="#8B5CF6", hover_color="#7C3AED", state="disabled")
+            self.btn_sync.configure(state="disabled")
+            
+    def _auto_sync_loop(self):
+        while self.is_auto_sync and self.connected and self.driver:
+            self._do_sync()
+            if self.is_auto_sync:
+                self._set_status_text("⏳ Esperando para siguiente ciclo automático...")
+                time.sleep(5) # Pequeña pausa entre ciclos para no saturar CPU/Navegador
+
+        # Cuando el ciclo termina o se desactiva
+        self.after(0, lambda: self.btn_sync_auto.configure(state="normal", text="🤖  Sincronización Automática", fg_color="#8B5CF6", hover_color="#7C3AED"))
+        self.after(0, lambda: self.btn_sync.configure(state="normal", text="🔄  Sincronización Manual"))
+        self.after(0, lambda: self._set_status_text("Automático detenido. Sincronización manual disponible."))
 
     def _do_sync(self):
         """Realiza sincronización manual de órdenes."""
@@ -1256,8 +1501,10 @@ class App(ctk.CTk):
             import logging
             logging.exception("Error en _do_sync:")
         finally:
-            self.after(0, lambda: self.btn_sync.configure(
-                state="normal", text="🔄  Sincronizar pedidos"))
+            if not self.is_auto_sync:
+                self.after(0, lambda: self.btn_sync.configure(
+                    state="normal", text="🔄  Sincronización Manual"))
+                self.after(0, lambda: self.btn_sync_auto.configure(state="normal"))
 
     def _open_whatsapp(self):
         try:
@@ -1305,32 +1552,10 @@ class App(ctk.CTk):
             self.after(0, self._hide_qr_overlay)
             self.after(0, self._on_session_linked)
             self.after(0, lambda: self._set_status_text(
-                "Sesión vinculada. Sincronizando..."))
+                "Sesión vinculada. Iniciando sincronización automática..."))
 
-            try:
-                scraper = OrderScraper(
-                    self.driver,
-                    on_status=lambda msg: self.after(
-                        0, lambda m=msg: self._set_status_text(m)))
-                new_orders = scraper.fetch()
-                if not new_orders:
-                    diag = getattr(scraper, "last_run_diagnostics", {}) or {}
-                    import logging
-                    logging.warning("[SYNC-INIT] Sin órdenes en primer sync. diagnostics=%s", diag)
-                new_c, upd_c = self._db.merge(new_orders)
-                all_orders   = self._db.get_all()
-                self.after(0, lambda: self._load_orders(all_orders))
-                self.after(0, lambda: self._on_connected(new_c, upd_c))
-            except Exception as sync_error:
-                self.after(0, lambda: self.btn_sync.configure(
-                    state="normal", text="🔄  Sincronizar pedidos"))
-                self.after(0, lambda: self._set_status_text(
-                    "✅ WhatsApp vinculado. Sync inicial falló - intenta manualmente."))
-                self.after(0, lambda: messagebox.showerror(
-                    "Error en sincronización inicial",
-                    f"WhatsApp está conectado pero falló el primer sync.\n\n{str(sync_error)}\n\nPuedes intentar la sincronización manual después."))
-                import logging
-                logging.exception("Error en sincronización inicial:")
+            self.after(0, lambda: self._on_connected(0, 0))
+            self.after(0, self._toggle_auto_sync)
         except Exception as e:
             self.after(0, self._hide_qr_overlay)
             self._dispose_driver()
@@ -1343,7 +1568,9 @@ class App(ctk.CTk):
         self._set_status_text("WhatsApp vinculado. Cargando pedidos...")
         self.btn_connect.pack_forget()
         self.btn_sync.configure(state="disabled", text="Sincronizando...")
+        self.btn_sync_auto.configure(state="disabled")
         self.btn_sync.pack(fill="x", pady=(0, 6))
+        self.btn_sync_auto.pack(fill="x", pady=(0, 6))
         self.btn_disconnect.pack(fill="x")
         self._apply_filter()
 
@@ -1360,7 +1587,9 @@ class App(ctk.CTk):
         
         self._set_connection_state("connected")
         self._set_status_text(msg)
-        self.btn_sync.configure(state="normal", text="🔄  Sincronizar pedidos")
+        if not self.is_auto_sync:
+            self.btn_sync.configure(state="normal", text="🔄  Sincronización Manual")
+            self.btn_sync_auto.configure(state="normal")
         self._apply_filter()
 
     def _disconnect(self):
@@ -1368,8 +1597,10 @@ class App(ctk.CTk):
         self.connected = False
         self._set_connection_state("disconnected")
         self._set_status_text("Sin sincronizar")
+        self.is_auto_sync = False
         self.btn_disconnect.pack_forget()
         self.btn_sync.pack_forget()
+        self.btn_sync_auto.pack_forget()
         self.btn_connect.pack(fill="x", pady=(0, 6))
         self._reset_connect_btn()
 
@@ -1493,13 +1724,15 @@ class App(ctk.CTk):
                              tags=tags)
 
     def _refresh_kpis(self, orders: list):
-        total = sum(o["monto"] for o in orders)
+        total = sum(o["monto"] for o in orders if o.get("estado") in PAID_STATES)
         self.kpi_vars["total"].set(f"${total:,.2f}")
         self.kpi_vars["count"].set(str(len(orders)))
         self.kpi_vars["completado"].set(
-            str(sum(1 for o in orders if o["estado"] == "Completado")))
+            str(sum(1 for o in orders if o["estado"] in PAID_STATES)))
         self.kpi_vars["pendiente"].set(
             str(sum(1 for o in orders if o["estado"] == "Pendiente")))
+        self.kpi_vars["cancelado"].set(
+            str(sum(1 for o in orders if o["estado"] == "Cancelado")))
 
     def _sort_by(self, col: str):
         col_map = {"ID":"id","Cliente":"cliente","Producto":"producto",
@@ -1550,19 +1783,112 @@ class App(ctk.CTk):
     def _build_reports_page(self, container):
         self._reports_page = tk.Frame(container, bg=CONTENT_BG)
         self._reports_page.grid_columnconfigure(0, weight=1)
-        self._reports_page.grid_rowconfigure(1, weight=1)
+        self._reports_page.grid_rowconfigure(2, weight=1)
+
+        # Acciones Rápidas (Tarjetas Individuales)
+        quick_wrap = tk.Frame(self._reports_page, bg=CONTENT_BG)
+        quick_wrap.grid(row=0, column=0, sticky="ew", padx=24, pady=(20, 0))
+
+        tk.Label(quick_wrap, text="Generación Rápida", bg=CONTENT_BG, fg=TEXT_TITLE,
+                 font=("Segoe UI", 16, "bold")).pack(anchor="w", pady=(0, 10))
+
+        cards_frame = tk.Frame(quick_wrap, bg=CONTENT_BG)
+        cards_frame.pack(fill="x")
+
+        reports = [
+            ("Último Mes", "ultimo_mes", "📅", "Mes calendario anterior"),
+            ("Último Trimestre", "ultimo_trimestre", "📊", "Último trimestre cerrado"),
+            ("Lo que va de Año", "ytd", "📈", "Acumulado desde enero"),
+            ("Toda la Operación", "toda_operacion", "🌍", "Histórico completo")
+        ]
+        
+        for i, (title, mode, icon, desc) in enumerate(reports):
+            card = tk.Frame(cards_frame, bg=CARD_BG, highlightthickness=1, highlightbackground=BORDER)
+            card.pack(side="left", expand=True, fill="both", padx=(0, 14) if i < len(reports)-1 else 0)
+            
+            inner = tk.Frame(card, bg=CARD_BG)
+            inner.pack(padx=16, pady=16, fill="both", expand=True)
+            
+            top_row = tk.Frame(inner, bg=CARD_BG)
+            top_row.pack(fill="x")
+            
+            tk.Label(top_row, text=icon, bg=CARD_BG, font=("Segoe UI", 18)).pack(side="left", padx=(0, 8))
+            tk.Label(top_row, text=title, bg=CARD_BG, fg=TEXT_TITLE, font=("Segoe UI", 11, "bold")).pack(side="left")
+            
+            tk.Label(inner, text=desc, bg=CARD_BG, fg=TEXT_SECONDARY, font=("Segoe UI", 9)).pack(anchor="w", pady=(4, 12))
+            
+            btn_row = tk.Frame(inner, bg=CARD_BG)
+            btn_row.pack(fill="x", side="bottom")
+            
+            ctk.CTkButton(btn_row, text="📄 PDF", width=60, height=30, 
+                          fg_color=PRIMARY, hover_color=PRIMARY_HOVER, 
+                          font=ctk.CTkFont(size=11, weight="bold"), corner_radius=6,
+                          command=lambda m=mode: self._generate_quick_report(m, "pdf")).pack(side="left", expand=True, fill="x", padx=(0, 4))
+            ctk.CTkButton(btn_row, text="📊 Excel", width=60, height=30, 
+                          fg_color="#10B981", hover_color="#059669", 
+                          font=ctk.CTkFont(size=11, weight="bold"), corner_radius=6,
+                          command=lambda m=mode: self._generate_quick_report(m, "excel")).pack(side="left", expand=True, fill="x", padx=(4, 0))
 
         hdr = tk.Frame(self._reports_page, bg=CONTENT_BG)
-        hdr.grid(row=0, column=0, sticky="ew", padx=24, pady=(20, 8))
+        hdr.grid(row=1, column=0, sticky="ew", padx=24, pady=(20, 8))
         tk.Label(hdr, text="Reportes generados",
                  bg=CONTENT_BG, fg=TEXT_TITLE,
                  font=("Segoe UI", 18, "bold")).pack(side="left")
 
         self._reports_scroll = ctk.CTkScrollableFrame(
             self._reports_page, fg_color=CONTENT_BG, corner_radius=0)
-        self._reports_scroll.grid(row=1, column=0, sticky="nsew",
+        self._reports_scroll.grid(row=2, column=0, sticky="nsew",
                                    padx=24, pady=(0, 20))
         self._reports_scroll.grid_columnconfigure(0, weight=1)
+
+    def _generate_quick_report(self, mode: str, fmt: str):
+        now = date.today()
+        d_to = now
+        d_from = now
+        
+        if mode == "ultimo_mes":
+            first_day_this = now.replace(day=1)
+            d_to = first_day_this - timedelta(days=1)
+            d_from = d_to.replace(day=1)
+        elif mode == "ultimo_trimestre":
+            q = (now.month - 1) // 3 + 1
+            if q == 1:
+                d_from = date(now.year - 1, 10, 1)
+                d_to = date(now.year - 1, 12, 31)
+            else:
+                m_start = (q - 2) * 3 + 1
+                d_from = date(now.year, m_start, 1)
+                import calendar
+                _, last_day = calendar.monthrange(now.year, m_start + 2)
+                d_to = date(now.year, m_start + 2, last_day)
+        elif mode == "ytd":
+            d_from = date(now.year, 1, 1)
+            d_to = now
+        elif mode == "toda_operacion":
+            if self.orders:
+                min_f = min(o.get("fecha", "9999-12-31") for o in self.orders)
+                try:
+                    d_from = date.fromisoformat(min_f)
+                except Exception:
+                    d_from = now
+            else:
+                d_from = now
+            d_to = now
+            
+        s_from = d_from.isoformat()
+        s_to = d_to.isoformat()
+        
+        export_orders = [o for o in self.orders if s_from <= o["fecha"] <= s_to]
+        
+        if fmt == "pdf":
+            ok, msg = self._exporter.to_pdf(export_orders, s_from, s_to)
+        else:
+            ok, msg = self._exporter.to_excel(export_orders, s_from, s_to)
+            
+        if ok:
+            self._refresh_reports()
+        else:
+            messagebox.showerror("Error", msg)
 
     def _refresh_reports(self):
         if hasattr(self, "_reports_inner") and self._reports_inner.winfo_exists():

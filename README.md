@@ -1,230 +1,94 @@
-# WBS Order Manager - Scraper de WhatsApp Business
+# WBS Order Manager - Manual de Usuario
 
-**Sistema confiable para sincronización de órdenes de WhatsApp Business Web.**
-
----
-
-## ✨ Características
-
-- 📱 **Conexión segura:** Conexión local sin tokens de API
-- 📦 **Extracción inteligente:** Obtiene ID único de cada orden
-- 🔄 **Sincronización sin duplicados:** Guaranteed unique orders
-- 📊 **Base de datos local:** SQLite con validación
-- 🎯 **Interfaz moderna:** CustomTkinter con dashboard
-- 📈 **Analítica integrada:** Gráficos de ventas
+Sistema integral para la sincronización automática, gestión y analítica de órdenes generadas a través de WhatsApp Business Web.
 
 ---
 
-## 🚀 Instalación Rápida
+## Descripción del Sistema
 
-### 1. Requisitos previos
-- Python 3.10+ (recomendado 3.11)
-- Chrome o Edge instalados
+WBS Order Manager es una aplicación de escritorio diseñada para consolidar las ventas originadas en WhatsApp Business. Extrae de forma segura la información de cada orden, previniendo duplicados y consolidando los datos en una base local robusta. Adicionalmente, cuenta con un panel analítico en tiempo real y opciones de generación de reportes avanzados para facilitar la toma de decisiones empresariales.
 
-### 2. Instalación automática (Windows)
-```bash
-install.bat
-```
-
-### 3. Instalación manual
-```bash
-# Crear ambiente virtual
-python -m venv .venv
-.\.venv\Scripts\activate
-
-# Instalar dependencias
-pip install -r requirements.txt
-```
-
-### 4. Ejecutar
-```bash
-python app/main.py
-```
+Características principales:
+- **Sincronización automatizada:** Conexión directa y segura a WhatsApp Web para la descarga de pedidos.
+- **Prevención de duplicados:** Identificación única de cada pedido para evitar registros repetidos.
+- **Panel analítico (Dashboard):** Visualización de métricas clave (ingresos, órdenes canceladas, top clientes y comparativas anuales).
+- **Generación de reportes:** Exportación a PDF y Excel de periodos predeterminados o personalizados.
+- **Base de datos local:** Almacenamiento privado y seguro mediante SQLite, sin depender de servidores externos.
 
 ---
 
-## 📚 Documentación
+## Requisitos del Sistema
 
-| Documento | Descripción |
-|-----------|------------|
-| [RESUMEN_EJECUTIVO.md](RESUMEN_EJECUTIVO.md) | Resumen de mejoras implementadas |
-| [SYNC_IMPROVEMENTS.md](SYNC_IMPROVEMENTS.md) | Guía técnica completa de sincronización |
-| [test_sync.py](test_sync.py) | Suite de pruebas automáticas |
+Para el correcto funcionamiento de la aplicación, el equipo debe cumplir con los siguientes requerimientos:
 
----
-
-## 🧪 Pruebas
-
-### Ejecutar suite completa
-```bash
-python test_sync.py
-```
-
-Resultado esperado:
-```
-✅ 01_db_creation
-✅ 02_insert_orders
-✅ 03_no_duplicates
-✅ 04_update_existing
-✅ 05_sync_stats
-✅ 06_query_methods
-✅ 07_hash_consistency
-✅ 08_sample_orders
-
-TOTAL: 8/8 pruebas pasadas 🎉
-```
+- **Sistema Operativo:** Windows 10 o superior (64-bits).
+- **Navegador Web:** Google Chrome o Microsoft Edge (en su última versión).
+- **Software base:** Python 3.10 o superior (se recomienda 3.11).
 
 ---
 
-## 📖 Uso
+## Guía de Instalación
 
-### Primer inicio
-1. Ejecutar `python app/main.py`
-2. Clic en **"📱 Conectar WhatsApp"**
-3. Escanear código QR en el navegador emergente
-4. ¡Listo! Las órdenes se sincronizan automáticamente
+Existen dos vías para instalar la aplicación en su entorno de trabajo:
 
-### Sincronización manual
-- Clic en **"🔄 Sincronizar pedidos"** en cualquier momento
-- Ver progreso en el status bar
-- Resultado: `✅ Sync: +X nuevas, Y actualizadas`
+### Instalación Rápida (Windows)
+1. Extraiga la carpeta del software en la ubicación deseada.
+2. Haga doble clic sobre el archivo `install.bat`. Este script configurará el entorno virtual y descargará las dependencias necesarias de forma automática.
 
-### Ver reportes
-- Ir a sección **"📈 Analítica"** para gráficos
-- Ir a sección **"📄 Reportes"** para historial
-
----
-
-## 🔍 Mejoras Implementadas (v1.0.0)
-
-### ✅ Extracción de ID Mejorada
-- 6 estrategias de búsqueda para obtener `whatsapp_order_id`
-- Fallback hash MD5 determinístico si falla búsqueda principal
-- Logging detallado de cada intento
-
-### ✅ Sincronización sin Duplicados
-- Búsqueda inteligente: primero por whatsapp_order_id, luego por hash
-- Restricción UNIQUE en BD
-- 3+ syncs del mismo dataset = 0 duplicados garantizado
-
-### ✅ Base de Datos Robusta
-- Migración automática: agrega `whatsapp_order_id` si no existe
-- Índices para búsquedas rápidas
-- Validación de datos antes de insertar
-- Transacciones SQLite seguras
-
-### ✅ Monitoreo y Auditoría
-- Logs de cada operación: inserción, actualización
-- Estadísticas en tiempo real: % órdenes con ID real
-- Métodos de consulta: por whatsapp_id, por id, por fecha
+### Instalación Manual (Técnica)
+1. Abra la terminal (Símbolo del sistema o PowerShell) en el directorio del proyecto.
+2. Cree un entorno virtual:
+   `python -m venv .venv`
+3. Active el entorno virtual:
+   `.\.venv\Scripts\activate`
+4. Instale las dependencias:
+   `pip install -r requirements.txt`
 
 ---
 
-## 🗄️ Estructura de Datos
+## Guía de Uso
 
-### Campo `whatsapp_order_id`
-```python
-{
-    'id': 'WA-A1B2C3D4E5F6',        # ID hash (fallback)
-    'whatsapp_order_id': '12345ABC', # ID real de WhatsApp
-    'cliente': 'María González',
-    'producto': 'Torta chocolate',
-    'monto': 45.0,
-    'fecha': '2025-03-22',
-    'estado': 'Completado'
-}
-```
+Para ejecutar la aplicación, inicie el archivo `run.bat` o ejecute desde la consola el comando `python app/main.py`.
 
----
+### 1. Conexión de WhatsApp
+1. Al iniciar la aplicación, diríjase a la barra lateral izquierda y presione **"Conectar WhatsApp"**.
+2. Se abrirá una ventana controlada de su navegador mostrando el código QR de WhatsApp Web.
+3. Desde su dispositivo móvil, escanee el código QR tal como lo haría al iniciar sesión normalmente.
+4. Una vez la sesión se haya vinculado, la ventana se acoplará y el sistema iniciará la primera sincronización de forma automática.
 
-## 🛠️ Solución de Problemas
+### 2. Gestión de Órdenes
+- **Sincronización Automática:** El sistema actualizará las órdenes en segundo plano mientras permanezca conectado.
+- **Sincronización Manual:** En caso de requerir una actualización inmediata, presione el botón **"Sincronización Manual"** en el panel izquierdo.
+- **Filtros de fecha:** En la pestaña principal de "Órdenes", puede seleccionar rangos de fecha específicos para consultar transacciones puntuales.
 
-### P: ¿Aparecen duplicados?
-R: Ejecutar `python test_sync.py` para validar BD. Ver [SYNC_IMPROVEMENTS.md](SYNC_IMPROVEMENTS.md) § 10.
+### 3. Analítica Empresarial
+Acceda a la pestaña **"Analítica"** para consultar métricas financieras y operativas. Encontrará la siguiente información:
+- Resumen financiero: Ingresos, promedio por orden y tasas de órdenes finalizadas/canceladas.
+- Gráfico de ventas y proyecciones.
+- Gráfico comparativo de ventas anuales.
+- Distribución de estados y tasas de cancelación mensuales.
+- Top de clientes por volumen de compra y productos más vendidos.
 
-### P: ¿Las órdenes no se sincronizan?
-R: 
-1. Verificar que WhatsApp Business está conectado
-2. Ver logs en consola de Python
-3. Revisar que el navegador no cierre automáticamente
-
-### P: ¿Cómo mejoro la tasa de extracción de ID?
-R: Ver [SYNC_IMPROVEMENTS.md](SYNC_IMPROVEMENTS.md) § 10 "Mantenimiento Futuro"
+### 4. Generación de Reportes
+En la pestaña **"Reportes"**, puede generar documentos consolidados en formato PDF o Excel. 
+- Utilice la sección **"Generación Rápida"** para obtener informes instantáneos de periodos comunes (ej. Último Mes, Último Trimestre, Acumulado Anual, Toda la Operación).
+- Todos los documentos generados se listarán en la parte inferior, donde podrá abrirlos haciendo clic en su botón respectivo.
 
 ---
 
-## 📊 Estadísticas
+## Solución de Problemas Frecuentes
 
-- **Órdenes sincronizadas:** 100%
-- **Tasa de duplicados:** 0% garantizado
-- **Tasa de extracción de ID real:** ~90%
-- **Tiempo de sync (8 órdenes):** <2 segundos
+**El navegador no abre tras presionar "Conectar WhatsApp"**
+Verifique que tiene Google Chrome o Microsoft Edge instalados en su última versión y que su antivirus no esté bloqueando la ejecución automatizada de Selenium.
 
----
+**Las órdenes no se están actualizando**
+Asegúrese de que el teléfono móvil mantenga conexión a internet y que la sesión en el navegador controlado por el sistema no haya sido cerrada o interrumpida de forma manual.
 
-## 📦 Estructura del Proyecto
-
-```
-scraper_wps_business/
-├── app/
-│   ├── main.py           # Punto de entrada
-│   ├── app.py            # UI principal
-│   ├── scraper.py        # Extracción de órdenes
-│   ├── database.py       # Persistencia
-│   ├── browser.py        # Gestor de driver Selenium
-│   ├── exporter.py       # Exportación a Excel/PDF
-│   └── config.py         # Constantes y datos de muestra
-├── SYNC_IMPROVEMENTS.md  # Guía técnica
-├── RESUMEN_EJECUTIVO.md  # Resumen de cambios
-├── test_sync.py          # Suite de pruebas
-├── requirements.txt      # Dependencias Python
-└── README.md             # Este archivo
-```
+**El monto total en los reportes no coincide con mi sumatoria manual**
+El cálculo financiero está programado de acuerdo a la lógica empresarial: únicamente suma las órdenes con estados aprobatorios (Completado, Enviado, Envío en preparación, Entregado). Las órdenes pendientes y canceladas son excluidas de la sumatoria de ingresos netos.
 
 ---
 
-## 🔐 Seguridad
+## Soporte y Mantenimiento
 
-✅ Usa WebDriver local (sin envío a servidores)
-✅ BD SQLite local (sin cloud)
-✅ Validación de todos los inputs
-✅ Transacciones para integridad
-✅ Índices UNIQUE para bloquear duplicados
-
----
-
-## 📝 Registro de Cambios
-
-**v1.0.0** (2025-03-22)
-- ✅ Extracción mejorada de whatsapp_order_id
-- ✅ Sincronización sin duplicados garantizada
-- ✅ BD actualizada con migración automática
-- ✅ Suite de pruebas (8/8 pasadas)
-- ✅ Documentación técnica completa
-
----
-
-## 📄 Licencia
-
-Proyecto privado
-
----
-
-## 💬 Preguntas Frecuentes
-
-**¿Necesito API key de WhatsApp?**
-No. Usa la versión Web con Selenium.
-
-**¿Es seguro sincronizar mucho?**
-Sí. Sin duplicados garantizados incluso si ejecutas el scraper 10 veces seguidas.
-
-**¿Se pierden datos al actualizar?**
-No. Usa UPSERT (INSERT OR UPDATE) de SQLite.
-
-**¿Puedo cambiar la BD a MySQL?**
-Sí, modificando `database.py`. Las consultas son estándar SQL.
-
----
-
-✨ **Listo para usar. Sincronización confiable de órdenes WhatsApp Business.**
-
+Este software realiza conexiones locales y procesos automatizados. No requiere llaves de API ni compromete los datos a servidores en la nube. Las carpetas de sesión y bases de datos (`app/orders.db`) son de uso exclusivo y local. Se recomienda hacer copias de seguridad de la base de datos periódicamente.
