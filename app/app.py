@@ -46,26 +46,26 @@ logger = logging.getLogger(__name__)
 ctk.set_appearance_mode("light")
 ctk.set_default_color_theme("blue")
 
-SIDEBAR_BG      = "#0F172A"
-SIDEBAR_SECTION = "#1E293B"
-SIDEBAR_HOVER   = "#334155"
-SIDEBAR_ACTIVE  = "#4F46E5"
-CONTENT_BG      = "#F1F5F9"
+SIDEBAR_BG      = "#2C1E16"
+SIDEBAR_SECTION = "#3E2723"
+SIDEBAR_HOVER   = "#5D4037"
+SIDEBAR_ACTIVE  = "#4CAF50"
+CONTENT_BG      = "#F4EADC"
 CARD_BG         = "#FFFFFF"
-BORDER          = "#E2E8F0"
-PRIMARY         = "#4F46E5"
-PRIMARY_HOVER   = "#4338CA"
-SUCCESS         = "#10B981"
-SUCCESS_LIGHT   = "#D1FAE5"
+BORDER          = "#D7CCC8"
+PRIMARY         = "#7C4A3A"
+PRIMARY_HOVER   = "#5A3326"
+SUCCESS         = "#4CAF50"
+SUCCESS_LIGHT   = "#E8F5E9"
 WARNING         = "#F59E0B"
 WARNING_LIGHT   = "#FEF3C7"
 DANGER          = "#EF4444"
 WA_GREEN        = "#25D366"
 WA_DARK         = "#075E54"
-TEXT_TITLE      = "#0F172A"
-TEXT_PRIMARY    = "#1E293B"
-TEXT_SECONDARY  = "#64748B"
-TEXT_MUTED      = "#94A3B8"
+TEXT_TITLE      = "#3E2723"
+TEXT_PRIMARY    = "#4E342E"
+TEXT_SECONDARY  = "#6D4C41"
+TEXT_MUTED      = "#A1887F"
 
 CHART_COLORS = ["#4F46E5","#10B981","#F59E0B","#EF4444","#8B5CF6",
                 "#06B6D4","#EC4899","#84CC16"]
@@ -82,7 +82,7 @@ MESES_CORTOS = ["Ene","Feb","Mar","Abr","May","Jun",
 class App(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self.title("WBS Order Manager")
+        self.title("Café Pa'l Monte")
         self.geometry("1260x820")
         self.minsize(1000, 660)
         self.orders        = []
@@ -137,11 +137,23 @@ class App(ctk.CTk):
 
         logo_wrap = ctk.CTkFrame(sb, fg_color="transparent")
         logo_wrap.grid(row=0, column=0, padx=20, pady=(28, 20), sticky="ew")
-        ctk.CTkLabel(logo_wrap, text="⬡", font=ctk.CTkFont(family=EF, size=30, weight="bold"),
-                     text_color=WA_GREEN).pack(side="left", padx=(0, 12))
+
+        img_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "logo.jpg")
+        if os.path.exists(img_path) and PIL_OK:
+            try:
+                logo_img = ctk.CTkImage(light_image=Image.open(img_path), size=(40, 40))
+                ctk.CTkLabel(logo_wrap, text="", image=logo_img).pack(side="left", padx=(0, 12))
+            except Exception as e:
+                logger.warning(f"Error loading logo: {e}")
+                ctk.CTkLabel(logo_wrap, text="⬡", font=ctk.CTkFont(family=EF, size=30, weight="bold"),
+                             text_color=WA_GREEN).pack(side="left", padx=(0, 12))
+        else:
+            ctk.CTkLabel(logo_wrap, text="⬡", font=ctk.CTkFont(family=EF, size=30, weight="bold"),
+                         text_color=WA_GREEN).pack(side="left", padx=(0, 12))
+
         nc = ctk.CTkFrame(logo_wrap, fg_color="transparent")
         nc.pack(side="left")
-        ctk.CTkLabel(nc, text="WBS Manager",
+        ctk.CTkLabel(nc, text="Pa'l Monte",
                      font=ctk.CTkFont(size=15, weight="bold"),
                      text_color="#F8FAFC").pack(anchor="w")
         ctk.CTkLabel(nc, text="WhatsApp Business",
@@ -240,7 +252,7 @@ class App(ctk.CTk):
         self.btn_disconnect.pack(fill="x")
         self.btn_disconnect.pack_forget()
 
-        ctk.CTkLabel(sb, text="v1.0.0 · WBS Order Manager",
+        ctk.CTkLabel(sb, text="v1.0.0 · Café Pa'l Monte",
                      font=ctk.CTkFont(size=9), text_color=TEXT_MUTED).grid(
             row=7, column=0, padx=16, pady=(8, 16))
 
@@ -964,7 +976,7 @@ class App(ctk.CTk):
         card.place(relx=0.5, rely=0.5, anchor="center")
         card.pack_propagate(False)
 
-        ctk.CTkLabel(card, text="WBS",
+        ctk.CTkLabel(card, text="Pa'l Monte",
                      font=ctk.CTkFont(size=28, weight="bold"),
                      text_color=WA_GREEN).pack(pady=(28, 0))
         ctk.CTkLabel(card, text="Conectar WhatsApp",

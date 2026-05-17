@@ -31,12 +31,12 @@ DEBUG_VISUAL = _env_bool("DEBUG_VISUAL", default=_env_bool("DEBUG", default=Fals
 DEBUG_STEP_PAUSE_SECONDS = float(os.getenv("DEBUG_STEP_PAUSE_SECONDS", "0.6"))
 
 # ── Paleta ────────────────────────────────────────────────────────────────────
-C_GREEN  = "#25D366"
-C_DARK   = "#075E54"
-C_LIGHT  = "#DCF8C6"
-C_BG     = "#F0F4F8"
+C_GREEN  = "#4CAF50"
+C_DARK   = "#2C1E16"
+C_LIGHT  = "#E8F5E9"
+C_BG     = "#F4EADC"
 C_WHITE  = "#FFFFFF"
-C_GRAY   = "#6B7280"
+C_GRAY   = "#8D6E63"
 C_RED    = "#EF4444"
 C_ORANGE = "#F59E0B"
 

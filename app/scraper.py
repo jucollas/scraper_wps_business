@@ -23,6 +23,8 @@ from config import (
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.common.action_chains import ActionChains
+from selenium.webdriver.common.keys import Keys
 from selenium.common.exceptions import (
     TimeoutException,
     NoSuchElementException,
@@ -366,7 +368,14 @@ class OrderScraper:
         try:
             element.click()
             return True
-        except (ElementClickInterceptedException, StaleElementReferenceException, TimeoutException, Exception) as exc:
+        except ElementClickInterceptedException as exc:
+            logger.debug("[NAVIGATION] click interceptado label=%s. Intentando ESC err=%s", label, exc)
+            try:
+                ActionChains(self.driver).send_keys(Keys.ESCAPE).perform()
+                time.sleep(0.3)
+            except Exception:
+                pass
+        except (StaleElementReferenceException, TimeoutException, Exception) as exc:
             logger.debug("[NAVIGATION] click normal falló label=%s err=%s", label, exc)
 
         try:
@@ -557,40 +566,23 @@ class OrderScraper:
                     pass
             
             # Si se obtuvo el ID de WhatsApp, usarlo como ID principal
-            # Si no, generar un ID único basado en hash de datos
+            # Si no, se descarta el pedido a petición del usuario.
             if wa_id:
                 order['whatsapp_order_id'] = wa_id
                 order['id'] = wa_id
                 logger.info(f"[Sync] Orden {order_count}: whatsapp_order_id='{wa_id}' cliente='{order.get('cliente')}' monto={order.get('monto')}")
                 self._trace_step("order", f"id extraído idx={order_count} id={wa_id}")
+                orders.append(order)
             else:
-                fallback_id, payload = self._build_fallback_id(order, order_count, detail_text)
-                prev_payload = fallback_seen.get(fallback_id)
-                if prev_payload and prev_payload != payload:
-                    logger.warning(
-                        "[Sync] Colisión de fallback detectada idx=%s fallback_id=%s. Se aplicará disambiguador.",
-                        order_count,
-                        fallback_id,
-                    )
-                    disambiguated = f"{fallback_id}-{order_count}"
-                    fallback_id = disambiguated
-
-                fallback_seen[fallback_id] = payload
-                order['whatsapp_order_id'] = None  # Marcar como no obtenido
-                order['id'] = fallback_id
                 logger.warning(
-                    "[Sync] Orden %s: ID no obtenido, fallback_id='%s' campos=%s raw='%s' detail='%s'",
+                    "[Sync] Orden %s ignorada: ID no obtenido (campos=%s)",
                     order_count,
-                    fallback_id,
-                    payload.get('fields_used'),
-                    payload.get('raw_preview'),
-                    payload.get('detail_preview'),
+                    order.get('cliente')
                 )
-                self._trace_step("order", f"id no extraído idx={order_count} fallback={fallback_id}")
+                self._trace_step("order", f"id no extraído idx={order_count} -> ignorado")
             
-            orders.append(order)
             order_count += 1
-            self._status(f"📦 {len(orders)} orden(es) leída(s)…")
+            self._status(f"📦 {len(orders)} orden(es) válida(s) extraída(s)…")
 
         self._status(f"✅ {len(orders)} pedido(s) importados · {datetime.now().strftime('%H:%M')}")
         if not orders:
@@ -1207,7 +1199,7 @@ class OrderScraper:
         """
         
         try:
-            btn.click()
+            self._safe_click(btn, f"open-order-{idx}")
             time.sleep(0.8)
             
             panel_wait = WebDriverWait(self.driver, 10)
@@ -1220,9 +1212,21 @@ class OrderScraper:
                 # strict=True asegura que solo se lea el panel derecho, nunca el body global (evitando falsos positivos)
                 detail_text = self._capture_order_detail_text(silent=(attempt > 0), strict=True)
                 
-                match = re.search(r'(?i)(pedido\s*n|order\s*id)\.?[°º]?\s*([A-Za-z0-9\-]{5,})', detail_text)
+                # Expresión regular ampliada para detectar identificador en "Solicitud de pedido" u otras variantes
+                match = re.search(r'(?i)(pedido\s*n|order\s*id|solicitud\s*n|id|pedido)\.?[°º]?\s*[:#-]?\s*([A-Za-z0-9\-]{8,15})', detail_text)
+                cand = None
+                
                 if match:
                     cand = match.group(2).strip().upper()
+                else:
+                    # Intento directo: formato típico de WhatsApp ej. 4V67ZPQG4PB (11 caracteres, mayúsculas y números)
+                    raw_match = re.search(r'\b([A-Z0-9]{11,15})\b', detail_text)
+                    if raw_match:
+                        raw_cand = raw_match.group(1)
+                        if re.search(r'[A-Z]', raw_cand) and re.search(r'[0-9]', raw_cand):
+                            cand = raw_cand
+
+                if cand:
                     # Rompemos el loop si encontramos un ID y es diferente al de la orden anterior,
                     # garantizando que el DOM de WhatsApp ya se actualizó.
                     if cand != last_extracted_id:
@@ -1232,7 +1236,7 @@ class OrderScraper:
                 # Si llegamos a la mitad de los intentos y no hay nada nuevo, reintentar el clic
                 if attempt == 2:
                     try:
-                        btn.click()
+                        self._safe_click(btn, f"retry-open-order-{idx}")
                     except Exception:
                         pass
             
@@ -1311,8 +1315,8 @@ class OrderScraper:
 
             # Estrategia adicional: Buscar directamente en detail_text usando regex
             if not order_id and detail_text:
-                for m in re.finditer(r'(?i)pedido\s*n\.?[°º]?\s*([A-Za-z0-9\-]{5,})', detail_text):
-                    cand = m.group(1)
+                for m in re.finditer(r'(?i)(?:pedido|solicitud)(\s*n\.?[°º]?|\s*de\s*pedido)?\s*[:#-]?\s*([A-Za-z0-9\-]{8,15})', detail_text):
+                    cand = m.group(2)
                     ok, reason = self._is_reliable_order_id(cand, "detail_text")
                     if ok:
                         order_id = cand.strip().upper()
@@ -1320,13 +1324,24 @@ class OrderScraper:
                         break
                         
                 if not order_id:
-                    for m in re.finditer(r'(?i)order\s*id\s*[:#-]?\s*([A-Za-z0-9\-]{5,})', detail_text):
-                        cand = m.group(1)
+                    for m in re.finditer(r'(?i)(order\s*id|id)\s*[:#-]?\s*([A-Za-z0-9\-]{8,15})', detail_text):
+                        cand = m.group(2)
                         ok, reason = self._is_reliable_order_id(cand, "detail_text_en")
                         if ok:
                             order_id = cand.strip().upper()
                             logger.info("[Orden %s] ID extraído='%s' estrategia=detail_text_regex fuente='Order ID'", idx, order_id)
                             break
+                            
+                # Fallback final: Buscar el patrón clásico directo (ej. 4V67ZPQG4PB)
+                if not order_id:
+                    for m in re.finditer(r'\b([A-Z0-9]{11,15})\b', detail_text):
+                        cand = m.group(1)
+                        if re.search(r'[A-Z]', cand) and re.search(r'[0-9]', cand):
+                            ok, reason = self._is_reliable_order_id(cand, "detail_text_raw")
+                            if ok:
+                                order_id = cand.strip().upper()
+                                logger.info("[Orden %s] ID extraído='%s' estrategia=detail_text_raw_fallback", idx, order_id)
+                                break
                 try:
                     page_source = self.driver.page_source
                     matches = re.findall(r'data-order-id=["\']([A-Za-z0-9\-]{3,})["\']', page_source)

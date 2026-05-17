@@ -17,6 +17,7 @@ try:
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
     from openpyxl.utils import get_column_letter
     from openpyxl.chart import BarChart, Reference
+    from openpyxl.drawing.image import Image
     EXCEL_OK = True
 except ImportError:
     EXCEL_OK = False
@@ -26,7 +27,7 @@ try:
     from reportlab.lib import colors
     from reportlab.lib.units import cm
     from reportlab.platypus import (SimpleDocTemplate, Table, TableStyle,
-                                     Paragraph, Spacer, HRFlowable)
+                                     Paragraph, Spacer, HRFlowable, Image as RLImage)
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.lib.enums import TA_CENTER, TA_RIGHT
     PDF_OK = True
@@ -165,12 +166,22 @@ class Exporter:
         hdr_font = Font(bold=True, color=_WHITE, size=11)
 
         # Título
-        ws["A1"] = "Reporte de Órdenes"
+        ws["A1"] = "Café Pa'l Monte - Reporte"
         ws["A1"].font = Font(bold=True, size=14, color=_GREEN)
         ws["A2"] = f"Período: {date_from} → {date_to}"
         ws["A2"].font = Font(italic=True, size=10)
         ws["A3"] = f"Generado: {datetime.now().strftime('%d/%m/%Y %H:%M')}"
         ws["A3"].font = Font(italic=True, size=10)
+
+        image_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "image.png")
+        if os.path.exists(image_path):
+            try:
+                img = Image(image_path)
+                img.width = 150
+                img.height = 150
+                ws.add_image(img, "D1")
+            except Exception as e:
+                logger.warning(f"No se pudo cargar el logo en Excel: {e}")
 
         # KPIs
         total  = sum(o["monto"] for o in orders)
@@ -245,7 +256,7 @@ class Exporter:
         doc    = SimpleDocTemplate(
             fname, pagesize=A4,
             leftMargin=1.5*cm, rightMargin=1.5*cm,
-            topMargin=2*cm,    bottomMargin=2*cm)
+            topMargin=5.5*cm,  bottomMargin=2*cm)
 
         styles = getSampleStyleSheet()
         title_style = ParagraphStyle(
@@ -277,12 +288,7 @@ class Exporter:
         elems = []
 
         # Encabezado
-        elems.append(Paragraph("WBS Order Manager", title_style))
-        elems.append(Paragraph("Reporte de Pedidos — WhatsApp Business", sub_style))
-        elems.append(Paragraph(
-            f"Período: {date_from} → {date_to}  |  "
-            f"Generado: {datetime.now().strftime('%d/%m/%Y %H:%M')}",
-            sub_style))
+        elems.append(Paragraph("Café Pa'l Monte", title_style))
         elems.append(HRFlowable(width="100%", thickness=1,
                                  color=colors.HexColor(f"#{_GREEN}"),
                                  spaceAfter=10))
@@ -378,15 +384,30 @@ class Exporter:
                                  color=colors.HexColor("#E5E7EB")))
         elems.append(Spacer(1, 4))
         elems.append(Paragraph(
-            f"WBS Order Manager  ·  {datetime.now().strftime('%d/%m/%Y %H:%M')}",
+            f"Café Pa'l Monte  ·  {datetime.now().strftime('%d/%m/%Y %H:%M')}",
             footer_style))
 
         def _draw_page(canvas, _doc):
             canvas.saveState()
+
+            # --- Background Image ---
+            bg_img = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "image.png")
+            if os.path.exists(bg_img):
+                canvas.drawImage(bg_img, 0, 0, width=A4[0], height=A4[1], preserveAspectRatio=False, mask="auto")
+
+            # Top-right period/generado
+            try:
+                canvas.setFont("Helvetica", 9)
+                canvas.setFillColor(colors.HexColor("#6B7280"))
+                period_txt = f"Período: {date_from} → {date_to}  |  Generado: {datetime.now().strftime('%d/%m/%Y %H:%M')}"
+                canvas.drawRightString(A4[0] - doc.rightMargin, A4[1] - 1.2 * cm, period_txt)
+            except Exception:
+                pass
+
             canvas.setFont("Helvetica", 8)
             canvas.setFillColor(colors.HexColor("#9CA3AF"))
             canvas.drawString(doc.leftMargin, 0.8 * cm,
-                              "WBS Order Manager · Reporte de pedidos")
+                              "Café Pa'l Monte · Reporte de pedidos")
             canvas.drawRightString(
                 A4[0] - doc.rightMargin,
                 0.8 * cm,
