@@ -89,6 +89,12 @@ class App(ctk.CTk):
         self.title("Café Pa'l Monte")
         self.geometry("1260x820")
         self.minsize(1000, 660)
+        
+        try:
+            from config import resource_path
+            self.iconbitmap(resource_path("assets/app.ico"))
+        except Exception as e:
+            print("No se pudo cargar el icono:", e)
         self.orders        = []
         self.driver        = None
         self.connected     = False

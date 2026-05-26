@@ -131,6 +131,7 @@ class OrderScraper:
         y espera a que termine antes de continuar.
         """
         self._status("🔍 Verificando estado de sincronización profunda...")
+        return # [CORRECCIÓN] Saltamos esta verificación para que nunca se quede atascado
         try:
             from selenium.webdriver.common.keys import Keys
             from selenium.webdriver.common.action_chains import ActionChains
@@ -157,8 +158,8 @@ class OrderScraper:
                 
             if is_syncing:
                 logger.info("[SYNC] Sincronización detectada en Ajustes. Esperando a que termine...")
-                # Esperar indeterminadamente (hasta 2 horas)
-                while time.time() - start_time < 7200:
+                # Esperar como máximo 60 segundos para no bloquear la app
+                while time.time() - start_time < 60:
                     still_syncing = False
                     try:
                         els = self.driver.find_elements(By.XPATH, sync_xpath)
