@@ -14,6 +14,7 @@ import time
 import calendar
 
 import customtkinter as ctk
+from selenium.webdriver.common.by import By
 
 try:
     from PIL import Image, ImageTk
