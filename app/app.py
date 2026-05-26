@@ -1004,57 +1004,146 @@ class App(ctk.CTk):
         canvas.get_tk_widget().pack(fill="both", expand=True, padx=4, pady=(4, 10))
 
     def _draw_top_customers(self, orders: list):
-        """Top 10 clientes que más compran (por ingreso pagado)."""
+        """Top clientes que más compran (por ingreso pagado) con límite dinámico y opción de copiar listado."""
+        if not hasattr(self, "_top_customers_limit"):
+            self._top_customers_limit = tk.StringVar(value="10")
+        if not hasattr(self, "_hide_revenue_in_top"):
+            self._hide_revenue_in_top = tk.BooleanVar(value=False)
+
+        try:
+            limit = int(self._top_customers_limit.get())
+        except ValueError:
+            limit = 10
+
         self._clear_frame(self._chart_customers)
+        
+        # Ajustar altura del contenedor dinámicamente según el límite
+        chart_height = 200 + limit * 20
+        self._chart_customers.config(height=chart_height)
+
         rev_cli = defaultdict(lambda: {"revenue": 0.0, "orders": 0})
         for o in orders:
             if o.get("estado") in PAID_STATES:
                 rev_cli[o["cliente"]]["revenue"] += o["monto"]
                 rev_cli[o["cliente"]]["orders"] += 1
-        top10 = sorted(rev_cli.items(), key=lambda x: x[1]["revenue"], reverse=True)[:10]
+        top_list = sorted(rev_cli.items(), key=lambda x: x[1]["revenue"], reverse=True)[:limit]
 
         hdr = tk.Frame(self._chart_customers, bg=CARD_BG)
         hdr.pack(fill="x", padx=16, pady=(14, 0))
-        tk.Label(hdr, text="Top 10 clientes por ingreso",
+        
+        tk.Label(hdr, text=f"Top {limit} clientes por ingreso",
                  bg=CARD_BG, fg=TEXT_TITLE,
                  font=("Segoe UI", 12, "bold")).pack(side="left")
 
-        if not top10:
+        if not top_list:
             tk.Label(self._chart_customers, text="Sin datos",
                      bg=CARD_BG, fg=TEXT_MUTED, font=("Segoe UI", 11)).pack(expand=True)
             return
 
-        names = [n[:24] + "..." if len(n) > 24 else n for n, _ in top10]
-        values = [d["revenue"] for _, d in top10]
-        order_counts = [d["orders"] for _, d in top10]
+        # Botón para copiar el listado (sin montos)
+        btn_copy = ctk.CTkButton(
+            hdr, text="📋 Copiar Listado", width=110, height=28,
+            fg_color=PRIMARY, hover_color=PRIMARY_HOVER,
+            text_color="#FFFFFF",
+            font=ctk.CTkFont(size=11, weight="bold"), corner_radius=6,
+            command=lambda: self._copy_top_customers_list(top_list)
+        )
+        btn_copy.pack(side="right", padx=(8, 0))
+
+        # Checkbox para ocultar dinero en el gráfico
+        chk_hide = ctk.CTkCheckBox(
+            hdr, text="Ocultar montos", font=ctk.CTkFont(size=11),
+            variable=self._hide_revenue_in_top,
+            fg_color=PRIMARY, hover_color=PRIMARY_HOVER,
+            text_color=TEXT_PRIMARY, border_color=BORDER,
+            width=110, height=28,
+            command=self._on_top_limit_changed
+        )
+        chk_hide.pack(side="right", padx=(8, 0))
+
+        # Selector del Top
+        cb_limit = ctk.CTkComboBox(
+            hdr, values=["5", "10", "15", "20"],
+            variable=self._top_customers_limit,
+            width=65, height=28, font=ctk.CTkFont(size=11),
+            fg_color=CONTENT_BG, border_color=BORDER,
+            button_color="#CBD5E1", button_hover_color=BORDER,
+            dropdown_fg_color=CARD_BG, dropdown_text_color=TEXT_PRIMARY,
+            dropdown_hover_color="#EEF2FF", text_color=TEXT_PRIMARY,
+            corner_radius=6, state="readonly",
+            command=lambda val: self._on_top_limit_changed()
+        )
+        cb_limit.pack(side="right", padx=(8, 0))
+        
+        tk.Label(hdr, text="Mostrar top:", bg=CARD_BG, fg=TEXT_SECONDARY,
+                 font=("Segoe UI", 10)).pack(side="right", padx=(0, 4))
+
+        names = [n[:24] + "..." if len(n) > 24 else n for n, _ in top_list]
+        values = [d["revenue"] for _, d in top_list]
+        order_counts = [d["orders"] for _, d in top_list]
         max_v = max(values) if values else 1
+        hide_money = self._hide_revenue_in_top.get()
 
         fig = Figure(facecolor=CARD_BG)
-        fig.subplots_adjust(left=0.22, right=0.93, top=0.92, bottom=0.08)
+        bottom_margin = 0.08 if limit > 10 else 0.12
+        fig.subplots_adjust(left=0.22, right=0.93, top=0.92, bottom=bottom_margin)
         ax = fig.add_subplot(111)
         gradient_colors = ["#4F46E5", "#6366F1", "#818CF8", "#A5B4FC", "#C7D2FE",
                            "#06B6D4", "#14B8A6", "#10B981", "#34D399", "#6EE7B7"]
+        bar_colors = [gradient_colors[i % len(gradient_colors)] for i in range(len(names))]
         bars = ax.barh(range(len(names)), values, height=0.55, zorder=2,
-                       color=gradient_colors[:len(names)], alpha=0.88)
+                       color=bar_colors, alpha=0.88)
         ax.set_yticks(range(len(names)))
         ax.set_yticklabels(names, fontsize=9, color=TEXT_PRIMARY)
         ax.invert_yaxis()
-        ax.xaxis.set_major_formatter(
-            mticker.FuncFormatter(lambda x, _: f"${x:,.0f}"))
-        ax.tick_params(axis="x", labelsize=9, labelcolor=TEXT_SECONDARY)
+
+        if hide_money:
+            ax.xaxis.set_major_formatter(mticker.NullFormatter())
+            ax.tick_params(axis="x", labelbottom=False)
+        else:
+            ax.xaxis.set_major_formatter(
+                mticker.FuncFormatter(lambda x, _: f"${x:,.0f}"))
+            ax.tick_params(axis="x", labelsize=9, labelcolor=TEXT_SECONDARY)
+
         ax.set_facecolor(CARD_BG)
         for spine in ["top", "right", "bottom"]:
             ax.spines[spine].set_visible(False)
         ax.spines["left"].set_color(BORDER)
         ax.xaxis.grid(True, color=BORDER, linewidth=0.8, zorder=0)
         ax.set_axisbelow(True)
+
         for bar, val, oc in zip(bars, values, order_counts):
+            if hide_money:
+                lbl_text = f"({oc} ord.)"
+            else:
+                lbl_text = f"${val:,.0f} ({oc} ord.)"
             ax.text(val + max_v * 0.01, bar.get_y() + bar.get_height() / 2,
-                    f"${val:,.0f} ({oc} ord.)", va="center",
+                    lbl_text, va="center",
                     fontsize=8, color=TEXT_PRIMARY, fontweight="bold")
+
         canvas = FigureCanvasTkAgg(fig, master=self._chart_customers)
         canvas.draw()
         canvas.get_tk_widget().pack(fill="both", expand=True, padx=4, pady=(4, 10))
+
+    def _on_top_limit_changed(self, event=None):
+        if not MATPLOTLIB_OK:
+            return
+        orders = self._get_analytics_orders()
+        self._draw_top_customers(orders)
+
+    def _copy_top_customers_list(self, top_list):
+        if not top_list:
+            messagebox.showwarning("Copiar", "No hay datos para copiar.")
+            return
+        lines = []
+        for i, (name, d) in enumerate(top_list, 1):
+            lines.append(f"{i}. {name}")
+        text_list = "\n".join(lines)
+        
+        self.clipboard_clear()
+        self.clipboard_append(text_list)
+        self.update()
+        messagebox.showinfo("Copiado", f"Se copió el listado de los mejores {len(top_list)} clientes al portapapeles (sin importes).")
 
     def _show_no_matplotlib_msg(self):
         for frame in [self._chart_monthly, self._chart_annual, self._chart_cancelled,
