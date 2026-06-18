@@ -1225,6 +1225,14 @@ class App(ctk.CTk):
                 driver.quit()
             except Exception:
                 pass
+        
+        # Asegurar que no queden procesos zombies del navegador
+        try:
+            from browser import BrowserManager
+            for name in ("edge", "chrome", "firefox"):
+                BrowserManager._kill_lingering_processes(f"{BrowserManager.SESSION_BASE}_{name}")
+        except Exception:
+            pass
 
     def _is_whatsapp_linked(self) -> bool:
         with self._driver_lock:
@@ -1611,9 +1619,15 @@ class App(ctk.CTk):
             self.after(0, lambda: self._set_status_text(msg))
             
         except Exception as e:
-            self.after(0, lambda: messagebox.showerror("Error de sync", str(e)))
             import logging
             logging.exception("Error en _do_sync:")
+            error_str = str(e).lower()
+            if "invalid session id" in error_str or "chrome not reachable" in error_str or "disconnected" in error_str or "session deleted" in error_str:
+                # Falla silenciosa si la sesión del navegador se cerró
+                pass
+            else:
+                msg = "Ocurrió un error inesperado al sincronizar. Consulta los logs para más detalles."
+                self.after(0, lambda m=msg: messagebox.showerror("Error de Sincronización", m))
         finally:
             if not self.is_auto_sync:
                 self.after(0, lambda: self.btn_sync.configure(
@@ -1671,9 +1685,17 @@ class App(ctk.CTk):
             self.after(0, lambda: self._on_connected(0, 0))
             self.after(0, self._toggle_auto_sync)
         except Exception as e:
+            import logging
+            logging.exception("Error en _open_whatsapp:")
             self.after(0, self._hide_qr_overlay)
             self._dispose_driver()
-            self.after(0, lambda: messagebox.showerror("Error de conexion", str(e)))
+            error_str = str(e).lower()
+            if "invalid session id" in error_str or "chrome not reachable" in error_str or "disconnected" in error_str or "session deleted" in error_str:
+                # Falla silenciosa
+                pass
+            else:
+                msg = "No se pudo conectar a WhatsApp. Consulta los logs para más detalles."
+                self.after(0, lambda m=msg: messagebox.showerror("Error de Conexión", m))
             self.after(0, self._reset_connect_btn)
 
     def _on_session_linked(self):

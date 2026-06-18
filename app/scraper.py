@@ -839,13 +839,60 @@ class OrderScraper:
 
     def _extract_rows_from_container(self, container, today: date) -> list[tuple[str, dict | date]]:
         rows_data = []
-        cur_date = today
         buttons = self._find_order_buttons(container)
         logger.info("[SCRAPER] Filas detectadas en contenedor: botones_candidatos=%s", len(buttons))
         if self._debug_visual:
             self._trace_step("scraper", f"botones candidatos={len(buttons)}")
 
+        script = """
+            const container = arguments[0];
+            const buttons = arguments[1];
+            const result = [];
+            
+            // Recolectar posibles encabezados de fecha
+            const elements = Array.from(container.querySelectorAll('div, span'));
+            const headerElements = [];
+            for (const el of elements) {
+                if (el.childElementCount === 0) {
+                    const txt = (el.innerText || el.textContent || "").trim();
+                    if (txt.length > 0 && txt.length < 30) {
+                        const isDate = /^HOY$/i.test(txt) || 
+                                     /^AYER$/i.test(txt) || 
+                                     /^\\d{1,2}[\\/\\-]\\d{1,2}[\\/\\-]\\d{2,4}$/.test(txt) || 
+                                     /^\\d{1,2}\\s+(de\\s+)?[a-zA-Záéíóúüñ]+\\s*(de\\s*\\d{4})?$/i.test(txt) ||
+                                     /^[a-zA-Záéíóúüñ]+\\s+\\d{1,2}$/i.test(txt);
+                        if (isDate) {
+                            headerElements.push({node: el, text: txt});
+                        }
+                    }
+                }
+            }
+            
+            for (const btn of buttons) {
+                let bestDateText = "";
+                for (const h of headerElements) {
+                    // Verificar si el encabezado está antes del botón en el documento
+                    if (btn.compareDocumentPosition(h.node) & Node.DOCUMENT_POSITION_PRECEDING) {
+                        bestDateText = h.text;
+                    } else {
+                        break; // Como headerElements está en orden, podemos detenernos
+                    }
+                }
+                result.push(bestDateText);
+            }
+            return result;
+        """
+        
+        try:
+            date_texts = self.driver.execute_script(script, container, buttons)
+        except Exception as e:
+            logger.error(f"[SCRAPER] Error extracting dates via JS: {e}")
+            date_texts = [""] * len(buttons)
+
         for order_idx, btn in enumerate(buttons):
+            dt_text = date_texts[order_idx] if order_idx < len(date_texts) else ""
+            cur_date = self._parse_date_header(dt_text, today) if dt_text else today
+            
             order = self._parse_order_row(btn, cur_date, order_idx)
             if order:
                 rows_data.append(('order', order))
