@@ -1919,8 +1919,8 @@ class App(ctk.CTk):
     def _open_order_modal(self, edit_mode=False, order_data=None):
         top = tk.Toplevel(self)
         top.title("Editar Pedido" if edit_mode else "Agregar Pedido Manual")
-        top.geometry("450x520")
-        top.resizable(False, False)
+        top.geometry("480x480")
+        top.resizable(False, True)
         top.transient(self)
         top.grab_set()
         top.configure(bg=CARD_BG)
@@ -1934,10 +1934,13 @@ class App(ctk.CTk):
 
         title_text = "Editar Pedido" if edit_mode else "Nuevo Pedido Manual"
         ctk.CTkLabel(top, text=title_text, font=ctk.CTkFont(size=18, weight="bold"),
-                     text_color=TEXT_TITLE).pack(pady=(20, 15))
+                     text_color=TEXT_TITLE).pack(side="top", pady=(15, 10))
 
-        form = ctk.CTkFrame(top, fg_color="transparent")
-        form.pack(padx=28, fill="both", expand=True)
+        actions = ctk.CTkFrame(top, fg_color="transparent")
+        actions.pack(side="bottom", fill="x", pady=15, padx=28)
+
+        form = ctk.CTkScrollableFrame(top, fg_color="transparent")
+        form.pack(side="top", padx=15, fill="both", expand=True)
 
         ctk.CTkLabel(form, text="ID de Pedido:", font=ctk.CTkFont(size=11, weight="bold"),
                      text_color=TEXT_SECONDARY).pack(anchor="w", pady=(8, 2))
@@ -2009,10 +2012,7 @@ class App(ctk.CTk):
             dropdown_hover_color="#EEF2FF", text_color=TEXT_PRIMARY,
             corner_radius=6, state="readonly"
         )
-        cb_estado.pack(fill="x")
-
-        actions = ctk.CTkFrame(top, fg_color="transparent")
-        actions.pack(fill="x", side="bottom", pady=24, padx=28)
+        cb_estado.pack(fill="x", pady=(0, 10))
 
         ctk.CTkButton(actions, text="Cancelar", fg_color="transparent", hover_color=CONTENT_BG,
                        text_color=TEXT_SECONDARY, border_width=1, border_color=BORDER,
