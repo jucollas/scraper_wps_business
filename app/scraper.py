@@ -886,7 +886,8 @@ class OrderScraper:
         try:
             date_texts = self.driver.execute_script(script, container, buttons)
         except Exception as e:
-            logger.error(f"[SCRAPER] Error extracting dates via JS: {e}")
+            error_msg = str(e).split('\n')[0]
+            logger.debug(f"[SCRAPER] Error extrayendo fechas via JS (ignorado por recarga de DOM): {error_msg}")
             date_texts = [""] * len(buttons)
 
         for order_idx, btn in enumerate(buttons):
@@ -960,8 +961,8 @@ class OrderScraper:
         cand = (candidate or '').strip().upper().lstrip('#')
         if not cand:
             return False, "vacío"
-        if len(cand) < 3:
-            return False, "demasiado corto"
+        if len(cand) < 8:
+            return False, "demasiado corto (mínimo 8 caracteres)"
 
         label_ctx = bool(re.search(
             r'(order\s*id|id\s*de\s*pedido|id\s*pedido|identificador|pedido\s*id|\bid\b)',
@@ -1315,9 +1316,7 @@ class OrderScraper:
                     except Exception:
                         pass
             
-            # Si después de intentar, detail_text está vacío, intentar un fallback global
-            if not detail_text:
-                detail_text = self._capture_order_detail_text(silent=True, strict=False)
+            # Ya no hacemos fallback a toda la página para evitar falsos positivos del chat
 
             # Intentar múltiples estrategias centradas en contexto de detalle e ID real.
             search_strategies = [
@@ -1490,7 +1489,7 @@ class OrderScraper:
         return has_request and not has_confirmed
 
     def _capture_order_detail_text(self, silent: bool = False, strict: bool = True) -> str:
-        """Captura texto bruto del panel de detalle del pedido para extraer el ID y como fallback."""
+        """Captura texto bruto del panel de detalle del pedido para extraer el ID."""
         selectors = [
             'div[aria-label="Detalles del pedido"]',
             'div[aria-label="Order details"]',
@@ -1515,20 +1514,6 @@ class OrderScraper:
             except Exception:
                 continue
         
-        if strict:
-            return ""
-
-        # Si no encontró los drawers específicos, intenta buscar cualquier contenedor de la derecha
-        try:
-            # WhatsApp divide la pantalla tipicamente usando elementos flex, buscamos el contenedor más a la derecha
-            body = self.driver.find_element(By.TAG_NAME, 'body')
-            text = ' '.join((body.text or '').split())
-            if text:
-                if not silent:
-                    logger.info("[Orden][detail] fuente=body preview='%s'", text[:160])
-                return text
-        except Exception:
-            pass
         return ""
 
     def _go_back(self):
